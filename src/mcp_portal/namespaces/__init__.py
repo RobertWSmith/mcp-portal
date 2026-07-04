@@ -24,7 +24,9 @@ class Namespace:
     create: NamespaceFactory
 
 
-DEFAULT_NAMESPACES: tuple[Namespace, ...] = (Namespace("health", health.create_server),)
+DEFAULT_NAMESPACES: tuple[Namespace, ...] = (
+    Namespace("health", health.create_server),
+)
 
 
 def iter_namespaces() -> tuple[Namespace, ...]:
