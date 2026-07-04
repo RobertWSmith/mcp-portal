@@ -36,11 +36,29 @@ transport for local MCP clients.
 
 ## Test
 
+PowerShell:
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
 
+Git Bash:
+
+```bash
+source .venv/Scripts/activate
+pytest
+```
+
+Or without activating:
+
+```bash
+./.venv/Scripts/python.exe -m pytest
+```
+
 Pytest enforces at least 90% coverage for `mcp_portal`.
+On Windows, run only one coverage-enabled test process at a time. Pytest writes a
+`.coverage` database, and concurrent PyCharm/terminal test runs can lock that file and
+raise a permission error.
 
 ## Format
 
