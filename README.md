@@ -34,6 +34,43 @@ the raw API key.
 This starts the FastMCP server over the default stdio transport, which is the usual
 transport for local MCP clients.
 
+After installing the package, the console script exposes the same launcher:
+
+```powershell
+mcp-portal
+```
+
+Pick another transport and connection options with flags:
+
+```powershell
+mcp-portal --transport http --host 127.0.0.1 --port 8000 --path /mcp
+```
+
+Useful launch options include:
+
+- `--transport stdio|http|sse|streamable-http`
+- `--host`, `--port`, and `--path` for HTTP-based transports
+- `--log-level debug|info|warning|error|critical`
+- `--show-banner` or `--no-banner`
+- `--stateless` or `--stateful`
+- `--json-response` or `--no-json-response` for HTTP-based transports
+- `--env-file path\to\.env`
+- `--debug-ui` or `--no-debug-ui`
+
+Run `mcp-portal --help` for the complete command-line reference.
+
+## Debug UI
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+fastmcp dev apps src/mcp_portal/server.py
+```
+
+This starts the MCP server over HTTP on port 8000, starts the FastMCP Apps dev UI
+on port 8080, and opens the browser to the interactive `portal_debug` dashboard.
+Use `--mcp-port` or `--dev-port` if either port is already taken. Keep the virtual
+environment activated so FastMCP's reload worker can find the `fastmcp` command.
+
 ## Test
 
 PowerShell:

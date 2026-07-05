@@ -9,7 +9,7 @@ description = "A small, extensible FastMCP server scaffold."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastmcp>=3.0.0,<4",
+    "fastmcp[apps]>=3.0.0,<4",
     "python-dotenv>=1.0.1,<2",
 ]
 
@@ -31,7 +31,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=mcp_portal --cov-report=term-missing --cov-fail-under=90"
+addopts = "--cov=mcp_portal --cov-report=term --cov-fail-under=90"
 
 [tool.coverage.run]
 branch = true

@@ -59,6 +59,17 @@ def test_settings_defaults_and_placeholder_key(monkeypatch) -> None:
     }
 
 
+def test_settings_from_env_file_can_override_existing_values(tmp_path: Path, monkeypatch) -> None:
+    """Verify explicit override mode lets dotenv values win."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENAI_LARGE_LANGUAGE_MODEL=large-from-file\n", encoding="utf-8")
+    monkeypatch.setenv("OPENAI_LARGE_LANGUAGE_MODEL", "large-from-env")
+
+    settings = Settings.from_env(env_file, override=True)
+
+    assert settings.openai_large_language_model == "large-from-file"
+
+
 def test_resolve_env_file_prefers_explicit_path(tmp_path: Path) -> None:
     """Verify explicit dotenv paths are returned unchanged."""
     env_file = tmp_path / "custom.env"

@@ -26,17 +26,18 @@ class Settings:
     openai_embedding_model: str
 
     @classmethod
-    def from_env(cls, env_file: str | Path | None = None) -> "Settings":
+    def from_env(cls, env_file: str | Path | None = None, override: bool = False) -> "Settings":
         """Build settings from environment variables and an optional `.env` file.
 
         Args:
             env_file: Optional path to a dotenv file. When omitted, `.env` is resolved from
                 the current working directory, then the project root.
+            override: Whether dotenv values should override existing environment values.
 
         Returns:
             Settings populated from the existing environment-variable contract.
         """
-        load_dotenv(_resolve_env_file(env_file), override=False)
+        load_dotenv(_resolve_env_file(env_file), override=override)
 
         return cls(
             openai_api_key=_optional_env("OPENAI_API_KEY"),
