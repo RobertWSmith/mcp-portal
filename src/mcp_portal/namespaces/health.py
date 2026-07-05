@@ -1,39 +1,92 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastmcp import FastMCP
 
-from mcp_portal.config import Settings
-from mcp_portal.namespaces import register_namespace
+from mcp_portal.namespaces import (
+    NamespaceContext,
+    NamespaceDebugPanel,
+    NamespaceStatus,
+    register_namespace,
+)
 
 
-@register_namespace("health")
-def create_server(settings: Settings) -> FastMCP:
+def health_status(context: NamespaceContext) -> NamespaceStatus:
+    """Report health namespace runtime status.
+
+    Args:
+        context: Runtime services shared with the health namespace.
+
+    Returns:
+        Current health namespace status.
+    """
+    return NamespaceStatus(
+        state="ok",
+        message="Health namespace is ready.",
+        details={
+            "namespace": context.name,
+            "config": context.settings.health.public_snapshot(),
+        },
+    )
+
+
+def health_debug_panel(context: NamespaceContext) -> NamespaceDebugPanel:
+    """Build health namespace diagnostics for the central debug UI.
+
+    Args:
+        context: Runtime services shared with the health namespace.
+
+    Returns:
+        Debug metadata for health namespace tools and settings.
+    """
+    return NamespaceDebugPanel(
+        title="Health Namespace",
+        summary="Liveness and public runtime configuration tools.",
+        snapshot={
+            "namespace": context.name,
+            "tools": ["ping", "runtime_config"],
+            "settings": context.settings.health.public_snapshot(),
+        },
+    )
+
+
+@register_namespace(
+    "health",
+    description="Liveness checks and non-secret runtime configuration metadata.",
+    tags={"core", "health", "readonly"},
+    health_check=health_status,
+    debug=health_debug_panel,
+)
+def create_server(context: NamespaceContext) -> FastMCP:
     """Create the health namespace server.
 
     Args:
-        settings: Runtime settings shared by namespace servers.
+        context: Runtime services shared with the health namespace.
 
     Returns:
         A configured FastMCP child server with health and config tools.
     """
     server = FastMCP("Health")
 
-    @server.tool(tags={"health"})
+    @server.tool(tags={"health", "readonly"})
     def ping() -> str:
         """Return pong to confirm the server is alive.
 
         Returns:
             The literal string `pong`.
         """
+        context.logger.debug("Health ping requested")
         return "pong"
 
-    @server.tool(tags={"health", "config"})
-    def runtime_config() -> dict[str, str | bool]:
+    @server.tool(tags={"health", "config", "readonly"})
+    def runtime_config() -> dict[str, Any]:
         """Return non-secret runtime configuration for development.
 
         Returns:
             Public runtime settings with secrets omitted.
         """
-        return settings.public_snapshot()
+        context.logger.debug("Health runtime configuration requested")
+        return context.public_snapshot(context.settings.public_snapshot())
 
     return server

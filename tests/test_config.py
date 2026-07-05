@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mcp_portal.config import Settings, _optional_env, _resolve_env_file
+from mcp_portal.config import Settings, _bool_env, _optional_env, _resolve_env_file
 
 
 def test_settings_from_explicit_env_file(tmp_path: Path, monkeypatch) -> None:
@@ -15,6 +15,7 @@ def test_settings_from_explicit_env_file(tmp_path: Path, monkeypatch) -> None:
                 "OPENAI_LARGE_LANGUAGE_MODEL=large-from-file",
                 "OPENAI_SMALL_LANGUAGE_MODEL=small-from-file",
                 "OPENAI_EMBEDDING_MODEL=embedding-from-file",
+                "MCP_PORTAL_HEALTH_ENABLED=false",
             ]
         ),
         encoding="utf-8",
@@ -24,17 +25,22 @@ def test_settings_from_explicit_env_file(tmp_path: Path, monkeypatch) -> None:
         "OPENAI_LARGE_LANGUAGE_MODEL",
         "OPENAI_SMALL_LANGUAGE_MODEL",
         "OPENAI_EMBEDDING_MODEL",
+        "MCP_PORTAL_HEALTH_ENABLED",
     ):
         monkeypatch.delenv(name, raising=False)
 
     settings = Settings.from_env(env_file)
 
     assert settings.openai_api_key == "from-file"
+    assert settings.namespace_enabled("health") is False
     assert settings.public_snapshot() == {
-        "has_openai_api_key": True,
-        "openai_large_language_model": "large-from-file",
-        "openai_small_language_model": "small-from-file",
-        "openai_embedding_model": "embedding-from-file",
+        "openai": {
+            "has_api_key": True,
+            "large_language_model": "large-from-file",
+            "small_language_model": "small-from-file",
+            "embedding_model": "embedding-from-file",
+        },
+        "health": {"enabled": False},
     }
 
 
@@ -44,6 +50,7 @@ def test_settings_defaults_and_placeholder_key(monkeypatch) -> None:
         "OPENAI_LARGE_LANGUAGE_MODEL",
         "OPENAI_SMALL_LANGUAGE_MODEL",
         "OPENAI_EMBEDDING_MODEL",
+        "MCP_PORTAL_HEALTH_ENABLED",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "your-api-key")
@@ -52,10 +59,13 @@ def test_settings_defaults_and_placeholder_key(monkeypatch) -> None:
 
     assert settings.has_openai_api_key is False
     assert settings.public_snapshot() == {
-        "has_openai_api_key": False,
-        "openai_large_language_model": "gpt-5.5",
-        "openai_small_language_model": "gpt-5.5-mini",
-        "openai_embedding_model": "text-embedding-3-large",
+        "openai": {
+            "has_api_key": False,
+            "large_language_model": "gpt-5.5",
+            "small_language_model": "gpt-5.5-mini",
+            "embedding_model": "text-embedding-3-large",
+        },
+        "health": {"enabled": True},
     }
 
 
@@ -89,3 +99,17 @@ def test_optional_env_returns_missing_values(monkeypatch) -> None:
     monkeypatch.delenv("OPTIONAL_VALUE", raising=False)
 
     assert _optional_env("OPTIONAL_VALUE") is None
+
+
+def test_bool_env_parses_boolean_values(monkeypatch) -> None:
+    """Verify boolean environment values are normalized."""
+    monkeypatch.setenv("BOOLEAN_VALUE", "off")
+
+    assert _bool_env("BOOLEAN_VALUE", default=True) is False
+
+
+def test_bool_env_uses_default_for_invalid_values(monkeypatch) -> None:
+    """Verify invalid boolean environment values fall back to the default."""
+    monkeypatch.setenv("BOOLEAN_VALUE", "sometimes")
+
+    assert _bool_env("BOOLEAN_VALUE", default=True) is True

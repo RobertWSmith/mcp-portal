@@ -9,7 +9,7 @@ from fastmcp import FastMCP
 
 from mcp_portal.config import Settings
 from mcp_portal.debug_ui import create_debug_app
-from mcp_portal.namespaces import Namespace, iter_namespaces
+from mcp_portal.namespaces import Namespace, build_namespace_runtimes, iter_namespaces
 
 Transport = Literal["stdio", "http", "sse", "streamable-http"]
 HTTP_TRANSPORTS: set[Transport] = {"http", "sse", "streamable-http"}
@@ -32,16 +32,22 @@ def create_mcp(
         A configured FastMCP server with all namespace servers mounted.
     """
     settings = settings or Settings.from_env()
+    namespace_manifests = tuple(namespaces or iter_namespaces())
+    namespace_runtimes = build_namespace_runtimes(namespace_manifests, settings)
     server = FastMCP(
         name="MCP Portal",
         instructions="Use namespaced tools for portal capabilities.",
     )
 
-    for namespace in namespaces or iter_namespaces():
-        server.mount(namespace.create(settings), namespace=namespace.name)
+    for runtime in namespace_runtimes:
+        if not settings.namespace_enabled(runtime.namespace.name):
+            runtime.context.logger.info("Namespace disabled; skipping tool mount")
+            continue
+
+        server.mount(runtime.namespace.create(runtime.context), namespace=runtime.namespace.name)
 
     if include_debug_ui:
-        server.add_provider(create_debug_app(settings))
+        server.add_provider(create_debug_app(settings, namespace_runtimes))
 
     return server
 

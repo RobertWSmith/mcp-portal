@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from fastmcp import FastMCPApp
@@ -27,13 +28,19 @@ from prefab_ui.components import (
 from prefab_ui.rx import RESULT, STATE
 
 from mcp_portal.config import Settings
+from mcp_portal.errors import InternalPortalError, PortalError
+from mcp_portal.namespaces import NamespaceDebugPanel, NamespaceRuntime, NamespaceStatus
 
 
-def create_debug_app(settings: Settings) -> FastMCPApp:
+def create_debug_app(
+    settings: Settings,
+    namespace_runtimes: Sequence[NamespaceRuntime] = (),
+) -> FastMCPApp:
     """Create the interactive FastMCP Apps debug provider.
 
     Args:
         settings: Runtime settings shared by namespace servers.
+        namespace_runtimes: Namespace manifests paired with their runtime contexts.
 
     Returns:
         A FastMCP app provider with a dashboard UI and app-only backend tool.
@@ -47,7 +54,7 @@ def create_debug_app(settings: Settings) -> FastMCPApp:
         Returns:
             JSON-formatted runtime configuration safe to display locally.
         """
-        return _runtime_snapshot_text(settings)
+        return _runtime_snapshot_text(settings, namespace_runtimes)
 
     @app.ui(
         name="portal_debug",
@@ -62,15 +69,16 @@ def create_debug_app(settings: Settings) -> FastMCPApp:
         """Render the local development dashboard.
 
         Returns:
-            A Prefab app containing runtime settings and a refresh action.
+            A Prefab app containing runtime settings and namespace diagnostics.
         """
-        snapshot = _runtime_snapshot(settings)
-        api_key_variant = "success" if snapshot["has_openai_api_key"] else "warning"
+        snapshot = _runtime_snapshot(settings, namespace_runtimes)
+        openai_snapshot = snapshot["settings"]["openai"]
+        api_key_variant = "success" if openai_snapshot["has_api_key"] else "warning"
         api_key_label = (
-            "API key configured" if snapshot["has_openai_api_key"] else "API key missing"
+            "API key configured" if openai_snapshot["has_api_key"] else "API key missing"
         )
 
-        with Column(gap=4, css_class="max-w-3xl mx-auto") as view:
+        with Column(gap=4, css_class="max-w-5xl mx-auto") as view:
             with Card():
                 with CardHeader():
                     with Row(gap=2, align="center", css_class="justify-between"):
@@ -78,29 +86,63 @@ def create_debug_app(settings: Settings) -> FastMCPApp:
                         Badge(api_key_label, variant=api_key_variant)
                     CardDescription("Runtime status for the local FastMCP development UI.")
 
-                with CardContent(), Column(gap=4):
-                    with Grid(columns={"default": 1, "md": 3}, gap=3):
-                        with Card(css_class="p-4"):
-                            Metric(
-                                label="Large model",
-                                value=str(snapshot["openai_large_language_model"]),
-                            )
-                        with Card(css_class="p-4"):
-                            Metric(
-                                label="Small model",
-                                value=str(snapshot["openai_small_language_model"]),
-                            )
-                        with Card(css_class="p-4"):
-                            Metric(
-                                label="Embedding model",
-                                value=str(snapshot["openai_embedding_model"]),
-                            )
+            with Grid(columns={"default": 1, "md": 3}, gap=3):
+                with Card():
+                    with CardContent(css_class="p-4"):
+                        Metric(
+                            label="Large model",
+                            value=str(openai_snapshot["large_language_model"]),
+                        )
+                with Card():
+                    with CardContent(css_class="p-4"):
+                        Metric(
+                            label="Small model",
+                            value=str(openai_snapshot["small_language_model"]),
+                        )
+                with Card():
+                    with CardContent(css_class="p-4"):
+                        Metric(
+                            label="Embedding model",
+                            value=str(openai_snapshot["embedding_model"]),
+                        )
 
-                    Separator()
-                    Text("Runtime snapshot", css_class="font-medium text-sm")
-                    Muted("Secret values are omitted.")
+            Text("Namespaces", css_class="font-medium text-sm")
+            with Grid(columns={"default": 1, "lg": 2}, gap=3):
+                for namespace_snapshot in snapshot["namespaces"]:
+                    status = namespace_snapshot["status"]
+                    debug_panel = namespace_snapshot.get("debug")
+                    mounted_label = "Mounted" if namespace_snapshot["mounted"] else "Not mounted"
+
+                    with Card():
+                        with CardHeader():
+                            with Row(gap=2, align="center", css_class="justify-between"):
+                                CardTitle(str(namespace_snapshot["name"]))
+                                Badge(
+                                    str(status["state"]),
+                                    variant=_status_variant(str(status["state"])),
+                                )
+                            CardDescription(
+                                namespace_snapshot["description"] or "Namespace diagnostics."
+                            )
+                        with CardContent(), Column(gap=3):
+                            with Row(gap=2, align="center"):
+                                Badge(mounted_label, variant="outline")
+                                for tag in namespace_snapshot["tags"]:
+                                    Badge(str(tag), variant="secondary")
+
+                            Text(str(status["message"]), css_class="text-sm")
+                            if debug_panel is not None:
+                                Separator()
+                                Text(str(debug_panel["title"]), css_class="font-medium text-sm")
+                                Muted(str(debug_panel["summary"]))
+                            Code(_json_text(namespace_snapshot), language="json")
+
+            with Card():
+                with CardHeader():
+                    CardTitle("Runtime Snapshot")
+                    CardDescription("Secret values are omitted.")
+                with CardContent():
                     Code(STATE.snapshot_text, language="json")
-
                 with CardFooter():
                     Button(
                         "Refresh",
@@ -115,34 +157,182 @@ def create_debug_app(settings: Settings) -> FastMCPApp:
         return PrefabApp(
             title="MCP Portal Debug",
             view=view,
-            state={"snapshot_text": _runtime_snapshot_text(settings)},
+            state={"snapshot_text": _runtime_snapshot_text(settings, namespace_runtimes)},
         )
 
     return app
 
 
-def _runtime_snapshot(settings: Settings) -> dict[str, Any]:
+def _runtime_snapshot(
+    settings: Settings,
+    namespace_runtimes: Sequence[NamespaceRuntime] = (),
+) -> dict[str, Any]:
     """Build the non-secret runtime snapshot shown by the debug UI.
 
     Args:
         settings: Runtime settings to expose safely.
+        namespace_runtimes: Namespace manifests paired with runtime contexts.
 
     Returns:
         A dictionary with public configuration and debug command metadata.
     """
     return {
-        **settings.public_snapshot(),
+        "settings": settings.public_snapshot(),
+        "namespaces": [_namespace_snapshot(runtime) for runtime in namespace_runtimes],
         "dev_command": "fastmcp dev apps src/mcp_portal/server.py",
     }
 
 
-def _runtime_snapshot_text(settings: Settings) -> str:
+def _namespace_snapshot(runtime: NamespaceRuntime) -> dict[str, Any]:
+    """Build a public debug snapshot for one namespace.
+
+    Args:
+        runtime: Namespace manifest paired with runtime context.
+
+    Returns:
+        Public namespace diagnostics.
+    """
+    status = _namespace_status(runtime)
+    debug_panel = _namespace_debug_panel(runtime)
+
+    return {
+        "name": runtime.namespace.name,
+        "description": runtime.namespace.description,
+        "tags": sorted(runtime.namespace.tags),
+        "mounted": runtime.context.settings.namespace_enabled(runtime.namespace.name),
+        "status": status.to_public_dict(runtime.context.redactor),
+        "debug": (
+            debug_panel.to_public_dict(runtime.context.redactor)
+            if debug_panel is not None
+            else None
+        ),
+    }
+
+
+def _namespace_status(runtime: NamespaceRuntime) -> NamespaceStatus:
+    """Return namespace status, converting hook failures to public errors.
+
+    Args:
+        runtime: Namespace manifest paired with runtime context.
+
+    Returns:
+        Namespace status metadata.
+    """
+    if not runtime.context.settings.namespace_enabled(runtime.namespace.name):
+        return NamespaceStatus(
+            state="disabled",
+            message="Namespace is configured off.",
+            details={"namespace": runtime.namespace.name},
+        )
+
+    if runtime.namespace.health_check is None:
+        return NamespaceStatus(
+            state="ok",
+            message="No namespace health check registered.",
+            details={"namespace": runtime.namespace.name},
+        )
+
+    try:
+        return runtime.namespace.health_check(runtime.context)
+    except PortalError as error:
+        runtime.context.logger.warning("Namespace health check failed: %s", error.message)
+        return NamespaceStatus(
+            state="error",
+            message=error.message,
+            details={"error": error.to_public_dict(runtime.context.redactor)},
+        )
+    except Exception as error:
+        runtime.context.logger.exception("Namespace health check crashed")
+        portal_error = InternalPortalError(
+            "Namespace health check crashed.",
+            namespace=runtime.namespace.name,
+            details={"hook": "health_check", "error_type": type(error).__name__},
+            cause=error,
+        )
+        return NamespaceStatus(
+            state="error",
+            message=portal_error.message,
+            details={"error": portal_error.to_public_dict(runtime.context.redactor)},
+        )
+
+
+def _namespace_debug_panel(runtime: NamespaceRuntime) -> NamespaceDebugPanel | None:
+    """Return a namespace debug panel, converting hook failures to public errors.
+
+    Args:
+        runtime: Namespace manifest paired with runtime context.
+
+    Returns:
+        Public namespace debug panel, or None when none is registered.
+    """
+    if runtime.namespace.debug is None:
+        return None
+
+    try:
+        return runtime.namespace.debug(runtime.context)
+    except PortalError as error:
+        runtime.context.logger.warning("Namespace debug hook failed: %s", error.message)
+        return NamespaceDebugPanel(
+            title="Debug hook failed",
+            summary=error.message,
+            snapshot={"error": error.to_public_dict(runtime.context.redactor)},
+        )
+    except Exception as error:
+        runtime.context.logger.exception("Namespace debug hook crashed")
+        portal_error = InternalPortalError(
+            "Namespace debug hook crashed.",
+            namespace=runtime.namespace.name,
+            details={"hook": "debug", "error_type": type(error).__name__},
+            cause=error,
+        )
+        return NamespaceDebugPanel(
+            title="Debug hook failed",
+            summary=portal_error.message,
+            snapshot={"error": portal_error.to_public_dict(runtime.context.redactor)},
+        )
+
+
+def _runtime_snapshot_text(
+    settings: Settings,
+    namespace_runtimes: Sequence[NamespaceRuntime] = (),
+) -> str:
     """Serialize the runtime snapshot for display in the UI.
 
     Args:
         settings: Runtime settings to expose safely.
+        namespace_runtimes: Namespace manifests paired with runtime contexts.
 
     Returns:
         Pretty-printed JSON with deterministic key ordering.
     """
-    return json.dumps(_runtime_snapshot(settings), indent=2, sort_keys=True)
+    return _json_text(_runtime_snapshot(settings, namespace_runtimes))
+
+
+def _json_text(value: Any) -> str:
+    """Serialize a value as deterministic pretty JSON.
+
+    Args:
+        value: JSON-serializable value.
+
+    Returns:
+        Pretty-printed JSON with deterministic key ordering.
+    """
+    return json.dumps(value, indent=2, sort_keys=True)
+
+
+def _status_variant(state: str) -> str:
+    """Map namespace state to a Prefab badge variant.
+
+    Args:
+        state: Namespace status state.
+
+    Returns:
+        Badge variant name.
+    """
+    if state == "ok":
+        return "success"
+    if state == "warning":
+        return "warning"
+    if state == "disabled":
+        return "secondary"
+    return "destructive"

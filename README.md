@@ -21,6 +21,7 @@ The scaffold reads the existing environment variables from `.env.example`:
 - `OPENAI_LARGE_LANGUAGE_MODEL`
 - `OPENAI_SMALL_LANGUAGE_MODEL`
 - `OPENAI_EMBEDDING_MODEL`
+- `MCP_PORTAL_HEALTH_ENABLED`
 
 The health namespace exposes only non-secret configuration metadata. It never returns
 the raw API key.
@@ -71,6 +72,10 @@ on port 8080, and opens the browser to the interactive `portal_debug` dashboard.
 Use `--mcp-port` or `--dev-port` if either port is already taken. Keep the virtual
 environment activated so FastMCP's reload worker can find the `fastmcp` command.
 
+The dashboard is composed centrally. Namespaces contribute status checks and debug
+panels through their manifest, while the portal owns redaction and presentation.
+Disabled namespaces still appear in the debug snapshot, but their tools are not mounted.
+
 ## Test
 
 PowerShell:
@@ -105,29 +110,57 @@ raise a permission error.
 
 ## Add A Namespace
 
-Create a module under `src/mcp_portal/namespaces/` with a `create_server(settings)`
-factory and decorate it with the namespace prefix:
+Create a module under `src/mcp_portal/namespaces/` with a `create_server(context)`
+factory and decorate it with the namespace manifest:
 
 ```python
 from fastmcp import FastMCP
 
-from mcp_portal.config import Settings
-from mcp_portal.namespaces import register_namespace
+from mcp_portal.namespaces import (
+    NamespaceContext,
+    NamespaceDebugPanel,
+    NamespaceStatus,
+    register_namespace,
+)
 
 
-@register_namespace("example")
-def create_server(settings: Settings) -> FastMCP:
+def example_status(context: NamespaceContext) -> NamespaceStatus:
+    """Report example namespace status."""
+    return NamespaceStatus(
+        state="ok",
+        message="Example namespace is ready.",
+        details={"namespace": context.name},
+    )
+
+
+def example_debug_panel(context: NamespaceContext) -> NamespaceDebugPanel:
+    """Build example namespace debug details."""
+    return NamespaceDebugPanel(
+        title="Example Namespace",
+        summary="Example tools and runtime metadata.",
+        snapshot={"large_model": context.settings.openai.large_language_model},
+    )
+
+
+@register_namespace(
+    "example",
+    description="Example tools for local development.",
+    tags={"example", "readonly"},
+    health_check=example_status,
+    debug=example_debug_panel,
+)
+def create_server(context: NamespaceContext) -> FastMCP:
     """Create the example namespace server.
 
     Args:
-        settings: Runtime settings shared by namespace servers.
+        context: Runtime services shared with the namespace.
 
     Returns:
         A configured FastMCP child server.
     """
     server = FastMCP("Example")
 
-    @server.tool
+    @server.tool(tags={"example", "readonly"})
     def hello(name: str) -> str:
         """Greet a user by name.
 
@@ -137,6 +170,7 @@ def create_server(settings: Settings) -> FastMCP:
         Returns:
             A friendly greeting.
         """
+        context.logger.debug("Example greeting requested")
         return f"Hello, {name}!"
 
     return server
@@ -144,3 +178,8 @@ def create_server(settings: Settings) -> FastMCP:
 
 FastMCP mounts the namespace with a prefix, so `hello` becomes `example_hello`.
 Namespace modules are discovered automatically; adding the decorated module is enough.
+
+Each namespace receives a `NamespaceContext` with shared settings, a namespace-scoped
+logger, a redactor for safe diagnostics, a clock, and lazy external client factories.
+Use `mcp_portal.testing.create_namespace_test_client` or
+`mcp_portal.testing.create_namespace_test_context` for focused namespace tests.
