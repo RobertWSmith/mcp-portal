@@ -29,7 +29,12 @@ from prefab_ui.rx import RESULT, STATE
 
 from mcp_portal.config import Settings
 from mcp_portal.errors import InternalPortalError, PortalError
-from mcp_portal.namespaces import NamespaceDebugPanel, NamespaceRuntime, NamespaceStatus
+from mcp_portal.namespaces import (
+    NamespaceDebugPanel,
+    NamespaceRuntime,
+    NamespaceStatus,
+    iter_namespace_discovery_errors,
+)
 
 
 def create_debug_app(
@@ -179,6 +184,7 @@ def _runtime_snapshot(
     return {
         "settings": settings.public_snapshot(),
         "namespaces": [_namespace_snapshot(runtime) for runtime in namespace_runtimes],
+        "namespace_discovery_errors": iter_namespace_discovery_errors(),
         "dev_command": "fastmcp dev apps src/mcp_portal/server.py",
     }
 

@@ -170,6 +170,7 @@ class NamespaceRuntime:
 
 
 _NAMESPACE_REGISTRY: dict[str, Namespace] = {}
+_DISCOVERY_ERRORS: dict[str, str] = {}
 _DISCOVERED = False
 
 
@@ -243,8 +244,16 @@ def build_namespace_runtimes(
     Returns:
         Runtime objects ready for mounting and diagnostics.
     """
-    shared_clients = clients or default_client_factories()
-    shared_redactor = redactor or Redactor.from_secrets((settings.openai.api_key,))
+    shared_clients = clients or default_client_factories(settings)
+    shared_redactor = redactor or Redactor.from_secrets(
+        (
+            settings.openai.api_key,
+            settings.auth.static_token,
+            settings.auth.jwt_public_key,
+            settings.database.sqlalchemy_url,
+            settings.database.oracle_password,
+        )
+    )
 
     return tuple(
         NamespaceRuntime(
@@ -300,15 +309,27 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _discover_namespace_modules() -> None:
-    """Import namespace modules so their registration decorators run."""
+def _discover_namespace_modules(*, strict: bool = False) -> None:
+    """Import namespace modules so their registration decorators run.
+
+    Args:
+        strict: Whether import failures should be raised instead of recorded.
+    """
     global _DISCOVERED
 
     if _DISCOVERED:
         return
 
+    logger = logging.getLogger(__name__)
+    _DISCOVERY_ERRORS.clear()
     for module_name in _iter_namespace_module_names():
-        importlib.import_module(module_name)
+        try:
+            importlib.import_module(module_name)
+        except ImportError as error:
+            if strict:
+                raise
+            _DISCOVERY_ERRORS[module_name] = f"{type(error).__name__}: {error}"
+            logger.warning("Skipping namespace module %s: %s", module_name, error)
 
     _DISCOVERED = True
 
@@ -327,11 +348,24 @@ def _iter_namespace_module_names() -> list[str]:
     )
 
 
-def iter_namespaces() -> tuple[Namespace, ...]:
+def iter_namespace_discovery_errors() -> dict[str, str]:
+    """Return namespace import errors recorded during discovery.
+
+    Returns:
+        Mapping of module names to public import error summaries.
+    """
+    _discover_namespace_modules()
+    return dict(sorted(_DISCOVERY_ERRORS.items()))
+
+
+def iter_namespaces(*, strict: bool = False) -> tuple[Namespace, ...]:
     """Return the namespaces mounted by the default server.
+
+    Args:
+        strict: Whether namespace import failures should stop discovery.
 
     Returns:
         The default namespace registry in deterministic order.
     """
-    _discover_namespace_modules()
+    _discover_namespace_modules(strict=strict)
     return tuple(_NAMESPACE_REGISTRY[name] for name in sorted(_NAMESPACE_REGISTRY))

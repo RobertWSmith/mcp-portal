@@ -14,6 +14,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+database = [
+    "sqlalchemy>=2.0,<3",
+]
+oracle = [
+    "sqlalchemy>=2.0,<3",
+    "oracledb>=2.5,<4",
+]
 dev = [
     "black==26.5.1",
     "pytest>=8.2,<9",

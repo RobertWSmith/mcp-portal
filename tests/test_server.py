@@ -206,7 +206,28 @@ async def test_runtime_config_does_not_expose_secret(client: Client) -> None:
     """Verify public runtime config omits the raw API key value."""
     result = await client.call_tool("health_runtime_config", {})
 
-    assert result.data == {
+    assert result.data["openai"] == {
+        "has_api_key": True,
+        "large_language_model": "large-model",
+        "small_language_model": "small-model",
+        "embedding_model": "embedding-model",
+    }
+    assert result.data["health"] == {"enabled": True}
+    assert result.data["auth"]["enabled"] is False
+    assert result.data["database"] == {
+        "provider": "oracle",
+        "oracle_preferred": True,
+        "sqlalchemy_enforced": True,
+        "sqlalchemy_configured": False,
+        "sqlalchemy_url_configured": False,
+        "oracle_configured": False,
+        "oracle_dsn_configured": False,
+        "oracle_user_configured": False,
+        "oracle_pool_min": 1,
+        "oracle_pool_max": 4,
+    }
+    assert result.data["authorization"]["tag_scopes"]["write"] == ["write"]
+    assert result.data != {
         "openai": {
             "has_api_key": True,
             "large_language_model": "large-model",

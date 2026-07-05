@@ -114,6 +114,24 @@ def test_server_main_rebuilds_server_for_env_file_and_debug_option(
     assert captured["include_debug_ui"] is False
 
 
+def test_server_main_uses_production_profile(monkeypatch) -> None:
+    """Verify the production CLI flag uses the production server factory."""
+    fake_mcp = FakeMcp()
+    captured = {}
+
+    def fake_create_production_mcp(settings=None):
+        """Record production server construction options and return a fake server."""
+        captured["settings"] = settings
+        return fake_mcp
+
+    monkeypatch.setattr(server_module, "create_production_mcp", fake_create_production_mcp)
+
+    server_module.main(["--production"])
+
+    assert fake_mcp.ran is True
+    assert captured["settings"] is not None
+
+
 def test_stdio_rejects_http_only_options() -> None:
     """Verify HTTP-only options are rejected for the stdio transport."""
     with pytest.raises(SystemExit) as exc_info:

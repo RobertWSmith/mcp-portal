@@ -36,12 +36,14 @@ def test_redactor_removes_secret_fields_and_literal_values() -> None:
             "has_openai_api_key": True,
             "message": "using secret-key",
             "nested": {"token": "abc"},
+            "authorization": {"tag_scopes": {"write": ["write"]}},
         }
     ) == {
         "openai_api_key": "[REDACTED]",
         "has_openai_api_key": True,
         "message": "using [REDACTED]",
         "nested": {"token": "[REDACTED]"},
+        "authorization": {"tag_scopes": {"write": ["write"]}},
     }
 
 

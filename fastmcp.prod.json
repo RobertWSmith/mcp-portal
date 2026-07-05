@@ -1,0 +1,24 @@
+{
+  "$schema": "https://gofastmcp.com/public/schemas/fastmcp.json/v1.json",
+  "source": {
+    "type": "filesystem",
+    "path": "src/mcp_portal/server.py",
+    "entrypoint": "create_production_mcp"
+  },
+  "environment": {
+    "type": "uv",
+    "python": ">=3.11",
+    "requirements": "requirements.txt",
+    "dependencies": [
+      "sqlalchemy>=2.0,<3",
+      "oracledb>=2.5,<4"
+    ]
+  },
+  "deployment": {
+    "transport": "streamable-http",
+    "host": "0.0.0.0",
+    "port": 8000,
+    "path": "/mcp",
+    "log_level": "INFO"
+  }
+}
