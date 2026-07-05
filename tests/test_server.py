@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 
+import mcp_portal.namespaces as namespace_registry
 from mcp_portal.config import Settings
 from mcp_portal.namespaces import Namespace
 from mcp_portal.server import create_mcp
@@ -45,9 +46,63 @@ async def test_default_namespaces_are_mounted(client: Client) -> None:
     assert {"health_ping", "health_runtime_config"} <= tool_names
 
 
+def test_namespace_registration_decorator_records_factory(monkeypatch) -> None:
+    """Verify namespace factories can register themselves with a decorator."""
+    monkeypatch.setattr(namespace_registry, "_NAMESPACE_REGISTRY", {})
+    monkeypatch.setattr(namespace_registry, "_DISCOVERED", True)
+
+    def create_example_server(settings: Settings) -> FastMCP:
+        """Create a placeholder namespace server.
+
+        Args:
+            settings: Runtime settings shared by namespace servers.
+
+        Returns:
+            A configured FastMCP child server.
+        """
+        return FastMCP(f"Example {settings.openai_large_language_model}")
+
+    decorated = namespace_registry.register_namespace("example")(create_example_server)
+
+    assert decorated is create_example_server
+    assert namespace_registry.iter_namespaces() == (Namespace("example", create_example_server),)
+
+
+def test_namespace_registration_rejects_duplicate_names(monkeypatch) -> None:
+    """Verify duplicate namespace prefixes fail during decorator registration."""
+    monkeypatch.setattr(namespace_registry, "_NAMESPACE_REGISTRY", {})
+    monkeypatch.setattr(namespace_registry, "_DISCOVERED", True)
+
+    def create_first_server(settings: Settings) -> FastMCP:
+        """Create a first placeholder namespace server.
+
+        Args:
+            settings: Runtime settings shared by namespace servers.
+
+        Returns:
+            A configured FastMCP child server.
+        """
+        return FastMCP(f"First {settings.openai_large_language_model}")
+
+    def create_second_server(settings: Settings) -> FastMCP:
+        """Create a second placeholder namespace server.
+
+        Args:
+            settings: Runtime settings shared by namespace servers.
+
+        Returns:
+            A configured FastMCP child server.
+        """
+        return FastMCP(f"Second {settings.openai_large_language_model}")
+
+    namespace_registry.register_namespace("example")(create_first_server)
+
+    with pytest.raises(ValueError, match="already registered"):
+        namespace_registry.register_namespace("example")(create_second_server)
+
+
 async def test_custom_namespace_registry(settings: Settings) -> None:
     """Verify callers can mount custom namespace registries."""
-    from fastmcp import FastMCP
 
     def create_example_server(settings: Settings) -> FastMCP:
         """Create an example namespace server for test composition.

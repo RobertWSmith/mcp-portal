@@ -3,8 +3,10 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from mcp_portal.config import Settings
+from mcp_portal.namespaces import register_namespace
 
 
+@register_namespace("health")
 def create_server(settings: Settings) -> FastMCP:
     """Create the health namespace server.
 

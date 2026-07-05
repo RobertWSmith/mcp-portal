@@ -69,14 +69,16 @@ raise a permission error.
 ## Add A Namespace
 
 Create a module under `src/mcp_portal/namespaces/` with a `create_server(settings)`
-factory:
+factory and decorate it with the namespace prefix:
 
 ```python
 from fastmcp import FastMCP
 
 from mcp_portal.config import Settings
+from mcp_portal.namespaces import register_namespace
 
 
+@register_namespace("example")
 def create_server(settings: Settings) -> FastMCP:
     """Create the example namespace server.
 
@@ -103,15 +105,5 @@ def create_server(settings: Settings) -> FastMCP:
     return server
 ```
 
-Then register it in `src/mcp_portal/namespaces/__init__.py`:
-
-```python
-from . import example, health
-
-DEFAULT_NAMESPACES = (
-    Namespace("health", health.create_server),
-    Namespace("example", example.create_server),
-)
-```
-
 FastMCP mounts the namespace with a prefix, so `hello` becomes `example_hello`.
+Namespace modules are discovered automatically; adding the decorated module is enough.
