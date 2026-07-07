@@ -96,11 +96,11 @@ authorization checks, request logging, timing, and optional response-size limiti
 | --- | --- | --- | --- |
 | `MCP_PORTAL_NAMESPACE_DISCOVERY_STRICT` | `false` | No | When true, namespace import failures stop server startup. When false, discovery can continue past optional namespace import failures. |
 
-## Database Settings
+## SQLAlchemy Database Settings
 
-All database access should go through a shared SQLAlchemy engine. Oracle is the
-preferred backend, but a portable SQLAlchemy URL can be used for tests or future
-database targets.
+Relational database access should go through a shared SQLAlchemy engine. Oracle is the
+preferred SQLAlchemy backend, but a portable SQLAlchemy URL can be used for tests or
+future relational database targets.
 
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
@@ -136,6 +136,53 @@ Install the matching optional dependency before using a database backend:
 
 Use `".[oracle]"` instead when connecting to Oracle.
 
+## LangChain MongoDB Settings
+
+LangChain MongoDB connectors are independent of `MCP_PORTAL_DATABASE_PROVIDER`. Use
+these settings when namespaces need `langchain-mongodb` integrations such as Atlas
+Vector Search, chat history, caches, loaders, docstores, or agent-toolkit database
+wrappers. Collection names are hard-coded in the portal and are not configured through
+environment variables.
+
+| Variable | Default | Required | Description |
+| --- | --- | --- | --- |
+| `MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING` | unset | Required to register the `langchain_mongodb` client factory | MongoDB connection URI. This value is omitted from public settings snapshots and redacted from diagnostics. |
+| `MCP_PORTAL_LANGCHAIN_MONGODB_DATABASE` | unset | Required for vector search, loader, docstore, and agent database helpers unless a namespace passes an override | Default MongoDB database name. |
+| `MCP_PORTAL_LANGCHAIN_MONGODB_VECTOR_SEARCH_INDEX` | `vector_index` | No | Default Atlas Vector Search index name used by vector search and semantic cache helpers. |
+
+Hard-coded collection aliases:
+
+| Alias | Collection | Default Uses |
+| --- | --- | --- |
+| `documents` | `documents` | Vector search, loader, docstore |
+| `chat_history` | `chat_history` | Chat message history |
+| `cache` | `cache` | MongoDB cache |
+| `semantic_cache` | `semantic_cache` | Atlas semantic cache |
+
+Example:
+
+```dotenv
+MCP_PORTAL_DATABASE_PROVIDER=none
+MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING=mongodb+srv://user:password@cluster.example/
+MCP_PORTAL_LANGCHAIN_MONGODB_DATABASE=portal
+MCP_PORTAL_LANGCHAIN_MONGODB_VECTOR_SEARCH_INDEX=portal_vector
+```
+
+Install the optional connector dependency before using these helpers:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[mongodb]"
+```
+
+Namespaces request the helper independently from the SQLAlchemy engine:
+
+```python
+connectors = context.clients.create("langchain_mongodb")
+vector_store = connectors.vector_search(embedding=embeddings)
+history = connectors.chat_message_history(session_id="chat-session")
+cache = connectors.cache()
+```
+
 ## Observability Settings
 
 | Variable | Default | Required | Description |
@@ -149,5 +196,5 @@ FastMCP emits OpenTelemetry spans when launched with an OpenTelemetry SDK or
 ## Secret Handling
 
 Secret-bearing values such as `OPENAI_API_KEY`, static bearer tokens, JWT keys,
-database URLs, and Oracle passwords are omitted from public settings snapshots. Status
-tools expose only whether those values are configured.
+database URLs, Oracle passwords, and MongoDB connection strings are omitted from public
+settings snapshots. Status tools expose only whether those values are configured.

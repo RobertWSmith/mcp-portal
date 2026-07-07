@@ -28,6 +28,7 @@ accepted values, loading behavior, and production requirements.
 - `MCP_PORTAL_AUTHZ_TAG_SCOPES` for tag policy metadata
 - `MCP_PORTAL_HTTP_PATH` and `MCP_PORTAL_HEALTH_PATH`
 - `MCP_PORTAL_DATABASE_PROVIDER`, `MCP_PORTAL_DATABASE_SQLALCHEMY_URL`, and `MCP_PORTAL_ORACLE_*`
+- `MCP_PORTAL_LANGCHAIN_MONGODB_*` for LangChain MongoDB connectors
 - `OTEL_SERVICE_NAME` and `OTEL_EXPORTER_OTLP_ENDPOINT`
 
 The health namespace exposes only non-secret configuration metadata. It never returns
@@ -97,9 +98,9 @@ Tag metadata can be attached to SDK tools through `_meta`. Keep using `readonly`
 `write`, `admin`, `external`, and `destructive` tags on namespace tools so access
 policy can stay centralized.
 
-All database access goes through SQLAlchemy engines. Oracle is the preferred backend
-for portal integrations, but namespaces should depend on SQLAlchemy APIs so engines can
-be swapped for tests or future database targets.
+Relational database access goes through SQLAlchemy engines. Oracle is the preferred
+SQLAlchemy backend for portal integrations, but namespaces should depend on SQLAlchemy
+APIs so engines can be swapped for tests or future relational targets.
 
 Install the portable database extra for generic SQLAlchemy URLs:
 
@@ -127,6 +128,35 @@ engine = context.clients.create("database")
 
 Keep raw driver APIs such as `oracledb.connect()` out of namespaces; use SQLAlchemy
 Core/ORM sessions or connections from the shared engine instead.
+
+LangChain MongoDB connectors are configured separately from the SQLAlchemy database
+provider, so they can be used with `MCP_PORTAL_DATABASE_PROVIDER=none`, `oracle`, or
+`sqlalchemy`.
+
+Install the MongoDB connector extra without Oracle dependencies:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[mongodb]"
+```
+
+Configure `MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING` and
+`MCP_PORTAL_LANGCHAIN_MONGODB_DATABASE`. Collection names are hard-coded in the portal
+so deployments cannot drift by changing environment variables. The built-in aliases are
+`documents`, `chat_history`, `cache`, and `semantic_cache`. Use
+`MCP_PORTAL_LANGCHAIN_MONGODB_VECTOR_SEARCH_INDEX` to override the Atlas Vector Search
+index name.
+
+Namespaces can request the lazy connector helper with:
+
+```python
+connectors = context.clients.create("langchain_mongodb")
+vector_store = connectors.vector_search(embedding=embeddings)
+history = connectors.chat_message_history(session_id="chat-session")
+cache = connectors.cache()
+```
+
+The helper also exposes `cache()`, `semantic_cache()`, `loader()`, `doc_store()`, and
+`agent_database()` for the matching `langchain-mongodb` integration classes.
 
 FastMCP project configuration is included:
 

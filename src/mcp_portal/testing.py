@@ -71,7 +71,13 @@ def create_namespace_test_context(
         namespace,
         selected_settings,
         clients=clients or default_client_factories(),
-        redactor=redactor or Redactor.from_secrets((selected_settings.openai.api_key,)),
+        redactor=redactor
+        or Redactor.from_secrets(
+            (
+                selected_settings.openai.api_key,
+                selected_settings.langchain_mongodb.connection_string,
+            )
+        ),
         clock=clock,
     )
 

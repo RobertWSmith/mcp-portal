@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -10,6 +11,19 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 AuthProviderName = Literal["none", "static", "jwt"]
 DatabaseProviderName = Literal["none", "oracle", "sqlalchemy"]
+LangChainMongoDBCollectionName = Literal[
+    "documents",
+    "chat_history",
+    "cache",
+    "semantic_cache",
+]
+DEFAULT_LANGCHAIN_MONGODB_COLLECTIONS: dict[LangChainMongoDBCollectionName, str] = {
+    "documents": "documents",
+    "chat_history": "chat_history",
+    "cache": "cache",
+    "semantic_cache": "semantic_cache",
+}
+DEFAULT_LANGCHAIN_MONGODB_VECTOR_INDEX = "vector_index"
 DEFAULT_TAG_SCOPE_RULES: dict[str, tuple[str, ...]] = {
     "admin": ("admin",),
     "destructive": ("admin",),
@@ -348,6 +362,82 @@ class DatabaseSettings:
 
 
 @dataclass(frozen=True)
+class LangChainMongoDBSettings:
+    """LangChain MongoDB connector settings for namespace integrations.
+
+    Attributes:
+        connection_string: Optional MongoDB connection URI.
+        database_name: Optional default database for connector helpers.
+        collections: Hard-coded collection aliases for connector helpers.
+        vector_search_index: Default Atlas Vector Search index name.
+    """
+
+    connection_string: str | None = None
+    database_name: str | None = None
+    collections: Mapping[LangChainMongoDBCollectionName, str] = field(
+        default_factory=lambda: dict(DEFAULT_LANGCHAIN_MONGODB_COLLECTIONS)
+    )
+    vector_search_index: str = DEFAULT_LANGCHAIN_MONGODB_VECTOR_INDEX
+
+    @property
+    def configured(self) -> bool:
+        """Report whether LangChain MongoDB connectors can be registered.
+
+        Returns:
+            True when a MongoDB connection URI is configured.
+        """
+        return self.connection_string is not None
+
+    def collection_name(self, collection: LangChainMongoDBCollectionName) -> str:
+        """Return the hard-coded MongoDB collection name for an alias.
+
+        Args:
+            collection: Collection alias to resolve.
+
+        Returns:
+            The MongoDB collection name assigned to the alias.
+        """
+        return self.collections[collection]
+
+    def namespace(self, collection: LangChainMongoDBCollectionName = "documents") -> str | None:
+        """Return the configured MongoDB namespace for a hard-coded collection alias.
+
+        Args:
+            collection: Collection alias to resolve.
+
+        Returns:
+            A `database.collection` namespace, or None when incomplete.
+        """
+        if self.database_name is None:
+            return None
+        return f"{self.database_name}.{self.collection_name(collection)}"
+
+    @property
+    def vector_search_configured(self) -> bool:
+        """Report whether the default vector-search helper has enough metadata.
+
+        Returns:
+            True when the connection string and default namespace are configured.
+        """
+        return self.configured and self.namespace("documents") is not None
+
+    def public_snapshot(self) -> dict[str, object]:
+        """Return LangChain MongoDB settings safe to expose.
+
+        Returns:
+            Public connector metadata with the MongoDB URI omitted.
+        """
+        return {
+            "configured": self.configured,
+            "connection_string_configured": self.connection_string is not None,
+            "database_configured": self.database_name is not None,
+            "collections": dict(sorted(self.collections.items())),
+            "vector_search_configured": self.vector_search_configured,
+            "vector_search_index": self.vector_search_index,
+        }
+
+
+@dataclass(frozen=True)
 class Settings:
     """Runtime settings grouped by namespace or provider boundary.
 
@@ -361,6 +451,7 @@ class Settings:
         namespace_discovery: Namespace discovery behavior.
         observability: Observability export metadata.
         database: Preferred database backend settings.
+        langchain_mongodb: LangChain MongoDB connector settings.
     """
 
     openai: OpenAISettings
@@ -374,6 +465,7 @@ class Settings:
     )
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
+    langchain_mongodb: LangChainMongoDBSettings = field(default_factory=LangChainMongoDBSettings)
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None, override: bool = False) -> "Settings":
@@ -447,6 +539,14 @@ class Settings:
                 oracle_pool_min=_int_env("MCP_PORTAL_ORACLE_POOL_MIN", default=1),
                 oracle_pool_max=_int_env("MCP_PORTAL_ORACLE_POOL_MAX", default=4),
             ),
+            langchain_mongodb=LangChainMongoDBSettings(
+                connection_string=_optional_env("MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING"),
+                database_name=_optional_env("MCP_PORTAL_LANGCHAIN_MONGODB_DATABASE"),
+                vector_search_index=(
+                    _optional_env("MCP_PORTAL_LANGCHAIN_MONGODB_VECTOR_SEARCH_INDEX")
+                    or DEFAULT_LANGCHAIN_MONGODB_VECTOR_INDEX
+                ),
+            ),
         )
 
     @property
@@ -507,7 +607,7 @@ class Settings:
             return self.health.enabled
         return True
 
-    def public_snapshot(self) -> dict[str, dict[str, str | bool]]:
+    def public_snapshot(self) -> dict[str, dict[str, object]]:
         """Return non-secret settings safe to expose through development tools.
 
         Returns:
@@ -523,6 +623,7 @@ class Settings:
             "namespace_discovery": self.namespace_discovery.public_snapshot(),
             "observability": self.observability.public_snapshot(),
             "database": self.database.public_snapshot(),
+            "langchain_mongodb": self.langchain_mongodb.public_snapshot(),
         }
 
 

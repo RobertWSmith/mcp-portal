@@ -42,6 +42,9 @@ PORTAL_ENV_NAMES = (
     "MCP_PORTAL_ORACLE_PASSWORD",
     "MCP_PORTAL_ORACLE_POOL_MIN",
     "MCP_PORTAL_ORACLE_POOL_MAX",
+    "MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING",
+    "MCP_PORTAL_LANGCHAIN_MONGODB_DATABASE",
+    "MCP_PORTAL_LANGCHAIN_MONGODB_VECTOR_SEARCH_INDEX",
     "OTEL_SERVICE_NAME",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
 )
@@ -106,6 +109,19 @@ def test_settings_from_explicit_env_file(tmp_path: Path, monkeypatch) -> None:
         "oracle_pool_min": 1,
         "oracle_pool_max": 4,
     }
+    assert snapshot["langchain_mongodb"] == {
+        "configured": False,
+        "connection_string_configured": False,
+        "database_configured": False,
+        "collections": {
+            "cache": "cache",
+            "chat_history": "chat_history",
+            "documents": "documents",
+            "semantic_cache": "semantic_cache",
+        },
+        "vector_search_configured": False,
+        "vector_search_index": "vector_index",
+    }
 
 
 def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
@@ -135,6 +151,9 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
                 "MCP_PORTAL_ORACLE_PASSWORD=secret",
                 "MCP_PORTAL_ORACLE_POOL_MIN=2",
                 "MCP_PORTAL_ORACLE_POOL_MAX=8",
+                "MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING=mongodb+srv://user:secret@cluster.example/test",
+                "MCP_PORTAL_LANGCHAIN_MONGODB_DATABASE=portal",
+                "MCP_PORTAL_LANGCHAIN_MONGODB_VECTOR_SEARCH_INDEX=portal_vector",
                 "OTEL_SERVICE_NAME=portal-prod",
                 "OTEL_EXPORTER_OTLP_ENDPOINT=http://otel.example:4317",
             ]
@@ -168,6 +187,16 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
     assert settings.database.oracle_configured is True
     assert settings.database.oracle_pool_min == 2
     assert settings.database.oracle_pool_max == 8
+    assert settings.langchain_mongodb.configured is True
+    assert settings.langchain_mongodb.connection_string == (
+        "mongodb+srv://user:secret@cluster.example/test"
+    )
+    assert settings.langchain_mongodb.database_name == "portal"
+    assert settings.langchain_mongodb.collection_name("documents") == "documents"
+    assert settings.langchain_mongodb.collection_name("chat_history") == "chat_history"
+    assert settings.langchain_mongodb.namespace() == "portal.documents"
+    assert settings.langchain_mongodb.vector_search_index == "portal_vector"
+    assert settings.langchain_mongodb.vector_search_configured is True
     assert settings.observability.enabled is True
     assert settings.observability.service_name == "portal-prod"
 
@@ -195,6 +224,7 @@ def test_settings_defaults_and_placeholder_key(monkeypatch) -> None:
     assert snapshot["http"]["path"] == "/mcp"
     assert snapshot["namespace_discovery"] == {"strict": False}
     assert snapshot["database"]["oracle_preferred"] is True
+    assert snapshot["langchain_mongodb"]["configured"] is False
 
 
 def test_settings_from_env_file_can_override_existing_values(tmp_path: Path, monkeypatch) -> None:

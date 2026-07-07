@@ -224,6 +224,19 @@ async def test_runtime_config_does_not_expose_secret(client: Client) -> None:
         "oracle_pool_min": 1,
         "oracle_pool_max": 4,
     }
+    assert result.data["langchain_mongodb"] == {
+        "configured": False,
+        "connection_string_configured": False,
+        "database_configured": False,
+        "collections": {
+            "cache": "cache",
+            "chat_history": "chat_history",
+            "documents": "documents",
+            "semantic_cache": "semantic_cache",
+        },
+        "vector_search_configured": False,
+        "vector_search_index": "vector_index",
+    }
     assert result.data["authorization"]["tag_scopes"]["write"] == ["write"]
     assert result.data != {
         "openai": {
