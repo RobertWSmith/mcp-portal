@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import runpy
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -218,3 +221,43 @@ def test_module_entrypoint_invokes_main(monkeypatch) -> None:
     runpy.run_module("mcp_portal.__main__", run_name="__main__")
 
     assert called is True
+
+
+def test_server_file_imports_without_src_on_pythonpath() -> None:
+    """Verify `mcp dev src/mcp_portal/server.py` can import the package."""
+    repo_root = Path(__file__).resolve().parents[1]
+    import_script = f"""
+import importlib.util
+import sys
+from pathlib import Path
+
+repo_root = Path({str(repo_root)!r})
+src_path = repo_root / "src"
+sys.path = [
+    path
+    for path in sys.path
+    if Path(path or ".").resolve() != src_path.resolve()
+]
+
+spec = importlib.util.spec_from_file_location(
+    "portal_server_for_mcp_dev",
+    src_path / "mcp_portal" / "server.py",
+)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+assert callable(module.create_mcp)
+assert any(Path(path).resolve() == src_path.resolve() for path in sys.path)
+"""
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    subprocess.run(
+        [sys.executable, "-c", import_script],
+        cwd=repo_root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )

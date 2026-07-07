@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import argparse
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
+import sys
 from typing import Any, Literal
+
+# The MCP CLI imports `mcp dev src/mcp_portal/server.py` as a standalone
+# file, which skips the package's `src` root unless the project is installed.
+if __package__ in {None, ""}:
+    source_root = Path(__file__).resolve().parents[1]
+    if (source_root / "mcp_portal").is_dir():
+        source_root_text = str(source_root)
+        if source_root_text not in sys.path:
+            sys.path.insert(0, source_root_text)
 
 from mcp.server.auth.settings import AuthSettings as SdkAuthSettings
 from mcp.server.fastmcp import FastMCP
