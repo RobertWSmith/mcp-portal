@@ -148,6 +148,62 @@ def test_sse_rejects_stateless_mode() -> None:
     assert exc_info.value.code == 2
 
 
+def test_portal_fastmcp_run_maps_legacy_transport_options(monkeypatch) -> None:
+    """Verify the SDK adapter maps legacy CLI run options onto SDK settings."""
+    calls = []
+    server = server_module.PortalFastMCP("Test")
+
+    def fake_run(self, transport="stdio", mount_path=None) -> None:
+        """Record the SDK transport that would have run."""
+        calls.append((self, transport, mount_path))
+
+    monkeypatch.setattr(server_module.FastMCP, "run", fake_run)
+
+    server.run(
+        transport="http",
+        show_banner=False,
+        host="127.0.0.1",
+        port=9001,
+        path="/custom",
+        log_level="debug",
+        json_response=True,
+        stateless=True,
+    )
+    server.run(transport="sse", path="/events")
+
+    assert [(transport, mount_path) for _, transport, mount_path in calls] == [
+        ("streamable-http", None),
+        ("sse", "/events"),
+    ]
+    assert server.settings.host == "127.0.0.1"
+    assert server.settings.port == 9001
+    assert server.settings.streamable_http_path == "/events"
+    assert server.settings.log_level == "DEBUG"
+    assert server.settings.json_response is True
+    assert server.settings.stateless_http is True
+
+
+def test_portal_fastmcp_http_app_applies_legacy_options(monkeypatch) -> None:
+    """Verify the ASGI compatibility wrapper applies HTTP options."""
+    server = server_module.PortalFastMCP("Test")
+
+    def fake_streamable_http_app(self):
+        """Return a placeholder ASGI app."""
+        return {"app": self.settings.streamable_http_path}
+
+    monkeypatch.setattr(
+        server_module.FastMCP,
+        "streamable_http_app",
+        fake_streamable_http_app,
+    )
+
+    app = server.http_app(path="/mcp", json_response=True, stateless_http=True)
+
+    assert app == {"app": "/mcp"}
+    assert server.settings.json_response is True
+    assert server.settings.stateless_http is True
+
+
 def test_module_entrypoint_invokes_main(monkeypatch) -> None:
     """Verify `python -m mcp_portal` invokes the server main function."""
     called = False

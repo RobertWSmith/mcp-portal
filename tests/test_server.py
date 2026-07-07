@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
-
 import pytest
-from fastmcp import Client, FastMCP
+from fastmcp import Client
+from mcp.server.fastmcp import FastMCP
 
 import mcp_portal.namespaces as namespace_registry
 from mcp_portal.config import Settings
@@ -57,16 +56,16 @@ async def test_debug_ui_provider_renders_dashboard(settings: Settings) -> None:
     """Verify the debug provider builds its snapshot tool and Prefab UI."""
     runtimes = build_namespace_runtimes(namespace_registry.iter_namespaces(), settings)
     debug_app = create_debug_app(settings, runtimes)
-    app_tools = {tool.name: tool for tool in await debug_app._list_tools()}
+    app_tools = {tool.name for tool in await debug_app.list_tools()}
 
-    snapshot_result = await app_tools["debug_snapshot"].run({})
-    dashboard_result = await app_tools["portal_debug"].run({})
+    async with Client(debug_app) as client:
+        snapshot_result = await client.call_tool("debug_snapshot", {})
+        dashboard_result = await client.call_tool("portal_debug", {})
 
-    assert set(app_tools) == {"debug_snapshot", "portal_debug"}
+    assert app_tools == {"debug_snapshot", "portal_debug"}
     assert "large-model" in snapshot_result.content[0].text
     assert "Health Namespace" in snapshot_result.content[0].text
-    assert dashboard_result.structured_content is not None
-    assert dashboard_result.structured_content["state"] == {
+    assert dashboard_result.data["state"] == {
         "snapshot_text": _runtime_snapshot_text(settings, runtimes)
     }
 
@@ -75,12 +74,11 @@ async def test_debug_ui_marks_missing_api_key() -> None:
     """Verify the dashboard handles missing OpenAI credentials."""
     settings = create_test_settings(openai_api_key=None)
     debug_app = create_debug_app(settings)
-    app_tools = {tool.name: tool for tool in await debug_app._list_tools()}
 
-    dashboard_result = await app_tools["portal_debug"].run({})
+    async with Client(debug_app) as client:
+        dashboard_result = await client.call_tool("portal_debug", {})
 
-    assert dashboard_result.structured_content is not None
-    assert "API key missing" in json.dumps(dashboard_result.structured_content)
+    assert '"has_api_key": false' in dashboard_result.data["state"]["snapshot_text"]
 
 
 def test_namespace_registration_decorator_records_factory(monkeypatch) -> None:
@@ -163,7 +161,7 @@ async def test_custom_namespace_registry(settings: Settings) -> None:
         """
         server = FastMCP("Example")
 
-        @server.tool
+        @server.tool()
         def configured_model() -> str:
             """Return the configured large model name.
 
@@ -192,14 +190,14 @@ async def test_custom_namespace_registry(settings: Settings) -> None:
         result = await custom_client.call_tool("example_configured_model", {})
 
     assert {tool.name for tool in tools} == {"example_configured_model"}
-    assert result.data == "large-model"
+    assert result.content[0].text == "large-model"
 
 
 async def test_health_ping(client: Client) -> None:
     """Verify the health ping tool returns a simple liveness response."""
     result = await client.call_tool("health_ping", {})
 
-    assert result.data == "pong"
+    assert result.content[0].text == "pong"
 
 
 async def test_runtime_config_does_not_expose_secret(client: Client) -> None:

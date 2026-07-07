@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
 from mcp_portal.namespaces import (
     NamespaceContext,
@@ -69,7 +69,7 @@ def create_server(context: NamespaceContext) -> FastMCP:
     """
     server = FastMCP("Health")
 
-    @server.tool(tags={"health", "readonly"})
+    @server.tool(meta={"tags": ["health", "readonly"]})
     def ping() -> str:
         """Return pong to confirm the server is alive.
 
@@ -79,7 +79,7 @@ def create_server(context: NamespaceContext) -> FastMCP:
         context.logger.debug("Health ping requested")
         return "pong"
 
-    @server.tool(tags={"health", "config", "readonly"})
+    @server.tool(meta={"tags": ["health", "config", "readonly"]})
     def runtime_config() -> dict[str, Any]:
         """Return non-secret runtime configuration for development.
 

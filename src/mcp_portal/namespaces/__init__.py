@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings

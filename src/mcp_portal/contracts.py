@@ -4,8 +4,8 @@ import hashlib
 import json
 from typing import Any
 
-from fastmcp import FastMCP
-from fastmcp.tools import Tool
+from mcp.server.fastmcp import FastMCP
+from mcp.types import Tool
 
 
 async def generate_tool_contract_manifest(server: FastMCP) -> dict[str, str]:
@@ -18,8 +18,8 @@ async def generate_tool_contract_manifest(server: FastMCP) -> dict[str, str]:
         Mapping of FastMCP tool keys to deterministic SHA-256 fingerprints.
     """
     manifest: dict[str, str] = {}
-    for tool in await server.list_tools(run_middleware=False):
-        manifest[str(tool.key)] = fingerprint_tool_contract(tool)
+    for tool in await server.list_tools():
+        manifest[tool.name] = fingerprint_tool_contract(tool)
 
     return dict(sorted(manifest.items()))
 
@@ -50,10 +50,8 @@ def tool_contract_payload(tool: Tool) -> dict[str, Any]:
     Returns:
         JSON-serializable contract fields visible to MCP clients.
     """
-    mcp_tool = tool.to_mcp_tool()
-    dumped = mcp_tool.model_dump(mode="json", by_alias=True, exclude_none=True)
+    dumped = tool.model_dump(mode="json", by_alias=True, exclude_none=True)
     payload = {
-        "key": str(tool.key),
         "name": dumped.get("name"),
         "description": dumped.get("description"),
         "inputSchema": dumped.get("inputSchema"),

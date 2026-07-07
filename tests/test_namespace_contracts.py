@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
-from fastmcp import Client, FastMCP
+from fastmcp import Client
+from mcp.server.fastmcp import FastMCP
 
 from mcp_portal.clients import ClientFactories
 from mcp_portal.debug_ui import _runtime_snapshot
@@ -106,7 +107,7 @@ async def test_namespace_test_client_mounts_one_namespace() -> None:
     def create_example_server(context: NamespaceContext) -> FastMCP:
         server = FastMCP("Example")
 
-        @server.tool(tags={"example", "readonly"})
+        @server.tool(meta={"tags": ["example", "readonly"]})
         def configured_model() -> str:
             return context.settings.openai_large_language_model
 
@@ -124,7 +125,7 @@ async def test_namespace_test_client_mounts_one_namespace() -> None:
         result = await client.call_tool("example_configured_model", {})
 
     assert {tool.name for tool in tools} == {"example_configured_model"}
-    assert result.data == "large-model"
+    assert result.content[0].text == "large-model"
 
 
 def test_namespace_debug_snapshot_handles_hook_failures() -> None:

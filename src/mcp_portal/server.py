@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastmcp import FastMCP
-from fastmcp.server.lifespan import lifespan
+from mcp.server.auth.settings import AuthSettings as SdkAuthSettings
+from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -14,12 +15,160 @@ from mcp_portal.auth import create_auth_provider
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
 from mcp_portal.debug_ui import create_debug_app
-from mcp_portal.middleware import create_production_middleware
 from mcp_portal.namespaces import Namespace, build_namespace_runtimes, iter_namespaces
 from mcp_portal.observability import configure_observability_environment
 
 Transport = Literal["stdio", "http", "sse", "streamable-http"]
 HTTP_TRANSPORTS: set[Transport] = {"http", "sse", "streamable-http"}
+
+
+class PortalFastMCP(FastMCP):
+    """Small compatibility layer around the SDK FastMCP server."""
+
+    def mount(self, server: FastMCP, *, namespace: str) -> None:
+        """Copy a namespace server's tools onto this server with a prefix.
+
+        Args:
+            server: Child SDK FastMCP server whose tools should be copied.
+            namespace: Namespace prefix to prepend to child tool names.
+        """
+        _copy_tools(server, self, prefix=f"{namespace}_")
+
+    def add_provider(self, provider: FastMCP) -> None:
+        """Copy development provider tools onto this server without a prefix.
+
+        Args:
+            provider: SDK FastMCP server exposing provider tools.
+        """
+        _copy_tools(provider, self, prefix="")
+
+    def http_app(
+        self,
+        *,
+        path: str | None = None,
+        json_response: bool | None = None,
+        stateless_http: bool | None = None,
+    ) -> Any:
+        """Return a streamable HTTP ASGI app using the old project call shape.
+
+        Args:
+            path: Optional MCP endpoint path override.
+            json_response: Optional JSON response mode override.
+            stateless_http: Optional stateless HTTP mode override.
+
+        Returns:
+            A Starlette-compatible streamable HTTP ASGI app.
+        """
+        _apply_transport_settings(
+            self,
+            path=path,
+            json_response=json_response,
+            stateless=stateless_http,
+        )
+        return self.streamable_http_app()
+
+    def run(
+        self,
+        transport: Transport | None = None,
+        show_banner: bool | None = None,
+        **transport_kwargs: Any,
+    ) -> None:
+        """Run the SDK server while accepting the previous CLI keyword shape.
+
+        Args:
+            transport: Transport protocol to run.
+            show_banner: Ignored compatibility flag from FastMCP 3.
+            transport_kwargs: Optional transport settings to apply before running.
+        """
+        _ = show_banner
+        selected_transport = transport or "stdio"
+        mount_path = None
+
+        if selected_transport in HTTP_TRANSPORTS:
+            _apply_transport_settings(self, **transport_kwargs)
+            if selected_transport == "sse":
+                mount_path = transport_kwargs.get("path")
+
+        sdk_transport = "streamable-http" if selected_transport == "http" else selected_transport
+        super().run(sdk_transport, mount_path=mount_path)
+
+
+def _copy_tools(source: FastMCP, target: FastMCP, *, prefix: str) -> None:
+    """Copy SDK FastMCP tools from one server to another.
+
+    Args:
+        source: Server whose tools should be copied.
+        target: Server receiving copied tool definitions.
+        prefix: Prefix to prepend to copied tool names.
+    """
+    target_tools = target._tool_manager._tools
+    for tool in source._tool_manager.list_tools():
+        name = f"{prefix}{tool.name}"
+        target_tools[name] = tool.model_copy(update={"name": name})
+
+
+def _apply_transport_settings(
+    server: FastMCP,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    path: str | None = None,
+    log_level: str | None = None,
+    json_response: bool | None = None,
+    stateless: bool | None = None,
+    **_: Any,
+) -> None:
+    """Apply previous FastMCP run kwargs to SDK server settings.
+
+    Args:
+        server: SDK FastMCP server to mutate before launch.
+        host: Optional HTTP host override.
+        port: Optional HTTP port override.
+        path: Optional streamable HTTP path override.
+        log_level: Optional server log level override.
+        json_response: Optional JSON response mode override.
+        stateless: Optional stateless HTTP mode override.
+        _: Ignored compatibility keyword arguments.
+    """
+    if host is not None:
+        server.settings.host = host
+    if port is not None:
+        server.settings.port = port
+    if path is not None:
+        server.settings.streamable_http_path = path
+    if log_level is not None:
+        server.settings.log_level = log_level.upper()
+    if json_response is not None:
+        server.settings.json_response = json_response
+    if stateless is not None:
+        server.settings.stateless_http = stateless
+
+
+def _sdk_auth_settings(settings: Settings) -> SdkAuthSettings | None:
+    """Build the SDK auth settings required when a token verifier is attached.
+
+    Args:
+        settings: Portal runtime settings containing auth configuration.
+
+    Returns:
+        SDK auth settings when authentication is enabled, otherwise None.
+    """
+    if not settings.auth.enabled:
+        return None
+
+    issuer_url = settings.auth.jwt_issuer or "http://localhost"
+    if not issuer_url.startswith(("http://", "https://")):
+        issuer_url = "http://localhost"
+
+    resource_path = settings.http.path
+    if not resource_path.startswith("/"):
+        resource_path = f"/{resource_path}"
+
+    return SdkAuthSettings(
+        issuer_url=issuer_url,
+        resource_server_url=f"http://localhost{resource_path}",
+        required_scopes=list(settings.auth.required_scopes),
+    )
 
 
 def create_mcp(
@@ -35,9 +184,9 @@ def create_mcp(
         settings: Optional settings object. When omitted, settings are loaded from the
             environment.
         namespaces: Optional namespace registry. When omitted, the default namespaces are used.
-        include_debug_ui: Whether to add the FastMCP Apps development dashboard.
-        include_production_middleware: Whether to attach production middleware. When
-            omitted, the value comes from settings.
+        include_debug_ui: Whether to add development debug tools.
+        include_production_middleware: Retained for CLI compatibility. The SDK
+            FastMCP server does not expose FastMCP 3 middleware hooks.
         clients: Optional shared client factory registry.
 
     Returns:
@@ -54,16 +203,18 @@ def create_mcp(
         settings,
         clients=shared_clients,
     )
-    server = FastMCP(
+    auth_provider = create_auth_provider(settings)
+    server = PortalFastMCP(
         name="MCP Portal",
         instructions="Use namespaced tools for portal capabilities.",
-        auth=create_auth_provider(settings),
-        middleware=create_production_middleware(
-            settings,
-            enabled=include_production_middleware,
-        ),
+        auth=_sdk_auth_settings(settings),
+        token_verifier=auth_provider,
+        streamable_http_path=settings.http.path,
+        json_response=bool(settings.http.json_response),
+        stateless_http=bool(settings.http.stateless),
         lifespan=create_portal_lifespan(shared_clients),
     )
+    _ = include_production_middleware
 
     for runtime in namespace_runtimes:
         if not settings.namespace_enabled(runtime.namespace.name):
@@ -108,15 +259,17 @@ def create_portal_lifespan(clients: ClientFactories):
         A composable FastMCP lifespan.
     """
 
-    @lifespan
+    @asynccontextmanager
     async def portal_lifespan(server: FastMCP):
         """Manage portal startup and shutdown resources.
 
         Args:
             server: FastMCP server entering its lifespan.
         """
-        yield {"clients": clients}
-        await clients.aclose()
+        try:
+            yield {"clients": clients}
+        finally:
+            await clients.aclose()
 
     return portal_lifespan
 
@@ -200,7 +353,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--production",
         action="store_true",
-        help="Use the production server profile: no debug UI and production middleware on.",
+        help="Use the production server profile: no debug tools and an operational health route.",
     )
 
     banner_group = parser.add_mutually_exclusive_group()
@@ -224,13 +377,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="debug_ui",
         action="store_true",
         default=True,
-        help="Include the FastMCP Apps debug provider. Enabled by default.",
+        help="Include MCP Portal debug tools. Enabled by default.",
     )
     debug_ui_group.add_argument(
         "--no-debug-ui",
         dest="debug_ui",
         action="store_false",
-        help="Run without the FastMCP Apps debug provider.",
+        help="Run without MCP Portal debug tools.",
     )
 
     json_group = parser.add_mutually_exclusive_group()

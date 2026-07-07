@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastmcp import Client, FastMCP
+from fastmcp import Client
+from mcp.server.fastmcp import FastMCP
 
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import HealthSettings, OpenAISettings, Settings

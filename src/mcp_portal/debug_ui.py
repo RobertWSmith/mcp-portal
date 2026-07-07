@@ -4,7 +4,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from fastmcp import FastMCPApp
+from mcp.server.fastmcp import FastMCP
 from prefab_ui.actions import CallTool, SetState
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
@@ -40,17 +40,17 @@ from mcp_portal.namespaces import (
 def create_debug_app(
     settings: Settings,
     namespace_runtimes: Sequence[NamespaceRuntime] = (),
-) -> FastMCPApp:
-    """Create the interactive FastMCP Apps debug provider.
+) -> FastMCP:
+    """Create the debug tool server.
 
     Args:
         settings: Runtime settings shared by namespace servers.
         namespace_runtimes: Namespace manifests paired with their runtime contexts.
 
     Returns:
-        A FastMCP app provider with a dashboard UI and app-only backend tool.
+        A FastMCP server with dashboard and snapshot tools.
     """
-    app = FastMCPApp("MCP Portal Debug")
+    app = FastMCP("MCP Portal Debug")
 
     @app.tool()
     def debug_snapshot() -> str:
@@ -61,20 +61,12 @@ def create_debug_app(
         """
         return _runtime_snapshot_text(settings, namespace_runtimes)
 
-    @app.ui(
-        name="portal_debug",
-        title="MCP Portal Debug",
-        description=(
-            "Open the MCP Portal debug dashboard. Use this in FastMCP Apps dev mode "
-            "to inspect runtime configuration and verify tool wiring."
-        ),
-        tags={"debug", "ui"},
-    )
-    def portal_debug() -> PrefabApp:
-        """Render the local development dashboard.
+    @app.tool()
+    def portal_debug() -> dict[str, Any]:
+        """Return the local development dashboard payload.
 
         Returns:
-            A Prefab app containing runtime settings and namespace diagnostics.
+            A Prefab app payload containing runtime settings and namespace diagnostics.
         """
         snapshot = _runtime_snapshot(settings, namespace_runtimes)
         openai_snapshot = snapshot["settings"]["openai"]
@@ -159,11 +151,12 @@ def create_debug_app(
                         ),
                     )
 
-        return PrefabApp(
+        dashboard = PrefabApp(
             title="MCP Portal Debug",
             view=view,
             state={"snapshot_text": _runtime_snapshot_text(settings, namespace_runtimes)},
         )
+        return dashboard.model_dump(mode="json", by_alias=True, exclude_none=True)
 
     return app
 
@@ -185,7 +178,7 @@ def _runtime_snapshot(
         "settings": settings.public_snapshot(),
         "namespaces": [_namespace_snapshot(runtime) for runtime in namespace_runtimes],
         "namespace_discovery_errors": iter_namespace_discovery_errors(),
-        "dev_command": "fastmcp dev apps src/mcp_portal/server.py",
+        "dev_command": "mcp-portal --transport streamable-http --port 8000",
     }
 
 

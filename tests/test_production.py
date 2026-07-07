@@ -22,6 +22,7 @@ from mcp_portal.contracts import generate_tool_contract_manifest
 from mcp_portal.errors import ConfigurationPortalError
 from mcp_portal.middleware import create_production_middleware
 from mcp_portal.observability import configure_observability_environment
+import mcp_portal.server as server_module
 from mcp_portal.server import create_mcp
 from mcp_portal.testing import create_test_settings
 
@@ -63,6 +64,26 @@ def test_jwt_auth_provider_accepts_symmetric_key_configuration() -> None:
     )
 
     assert create_auth_provider(settings) is not None
+
+
+def test_sdk_auth_settings_normalize_portal_configuration() -> None:
+    """Verify SDK auth settings are derived for authenticated HTTP servers."""
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(
+            provider="static",
+            required_scopes=("portal",),
+            static_token="local-token",
+        ),
+        http=HttpSettings(path="mcp"),
+    )
+
+    auth_settings = server_module._sdk_auth_settings(settings)
+
+    assert auth_settings is not None
+    assert str(auth_settings.issuer_url) == "http://localhost/"
+    assert str(auth_settings.resource_server_url) == "http://localhost/mcp"
+    assert auth_settings.required_scopes == ["portal"]
 
 
 def test_authorization_checks_follow_tag_scope_settings() -> None:

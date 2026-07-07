@@ -15,7 +15,9 @@ Copy-Item .env.example .env
 Use a 64-bit Python 3.11+ environment. Some FastMCP transitive dependencies ship native
 wheels, and 32-bit Python on Windows may force source builds.
 
-The scaffold reads the existing environment variables from `.env.example`:
+The scaffold reads the existing environment variables from `.env.example`. See
+[docs/environment-variables.md](docs/environment-variables.md) for defaults,
+accepted values, loading behavior, and production requirements.
 
 - `OPENAI_API_KEY`
 - `OPENAI_LARGE_LANGUAGE_MODEL`
@@ -23,8 +25,7 @@ The scaffold reads the existing environment variables from `.env.example`:
 - `OPENAI_EMBEDDING_MODEL`
 - `MCP_PORTAL_HEALTH_ENABLED`
 - `MCP_PORTAL_AUTH_*` for HTTP authentication
-- `MCP_PORTAL_AUTHZ_TAG_SCOPES` for tag-based authorization
-- `MCP_PORTAL_MIDDLEWARE_*` for production middleware
+- `MCP_PORTAL_AUTHZ_TAG_SCOPES` for tag policy metadata
 - `MCP_PORTAL_HTTP_PATH` and `MCP_PORTAL_HEALTH_PATH`
 - `MCP_PORTAL_DATABASE_PROVIDER`, `MCP_PORTAL_DATABASE_SQLALCHEMY_URL`, and `MCP_PORTAL_ORACLE_*`
 - `OTEL_SERVICE_NAME` and `OTEL_EXPORTER_OTLP_ENDPOINT`
@@ -70,8 +71,8 @@ Run `mcp-portal --help` for the complete command-line reference.
 ## Production
 
 Use the production profile when exposing the portal over HTTP. It disables the debug
-UI, enables production middleware, attaches lifecycle cleanup for shared clients, and
-adds an unauthenticated operational health route:
+tools, attaches lifecycle cleanup for shared clients, wires configured bearer-token
+authentication, and adds an unauthenticated operational health route:
 
 ```powershell
 mcp-portal --production --transport streamable-http --host 0.0.0.0 --port 8000 --path /mcp
@@ -92,10 +93,9 @@ Remote HTTP deployments should set `MCP_PORTAL_AUTH_PROVIDER=jwt` with either
 tokens are available through `MCP_PORTAL_AUTH_PROVIDER=static`, but they are intended
 only for local smoke tests.
 
-Tag-based authorization is configured with `MCP_PORTAL_AUTHZ_TAG_SCOPES`. The default
-rules require scopes for `admin`, `destructive`, `external`, and `write` tags. Keep
-using `readonly`, `write`, `admin`, `external`, and `destructive` tags on namespace
-tools so access policy can stay centralized.
+Tag metadata can be attached to SDK tools through `_meta`. Keep using `readonly`,
+`write`, `admin`, `external`, and `destructive` tags on namespace tools so access
+policy can stay centralized.
 
 All database access goes through SQLAlchemy engines. Oracle is the preferred backend
 for portal integrations, but namespaces should depend on SQLAlchemy APIs so engines can
@@ -156,20 +156,19 @@ manifest = await generate_tool_contract_manifest(create_mcp(include_debug_ui=Fal
 Each fingerprint is based on the MCP-facing tool payload, including the tool key and
 input/output schema.
 
-## Debug UI
+## Debug Tools
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-fastmcp dev apps src/mcp_portal/server.py
+mcp-portal --transport streamable-http --port 8000
 ```
 
-This starts the MCP server over HTTP on port 8000, starts the FastMCP Apps dev UI
-on port 8080, and opens the browser to the interactive `portal_debug` dashboard.
-Use `--mcp-port` or `--dev-port` if either port is already taken. Keep the virtual
-environment activated so FastMCP's reload worker can find the `fastmcp` command.
+This starts the MCP server over streamable HTTP on port 8000 and exposes the
+`portal_debug` and `debug_snapshot` tools for local diagnostics. Use `--port` if
+the port is already taken.
 
-The dashboard is composed centrally. Namespaces contribute status checks and debug
-panels through their manifest, while the portal owns redaction and presentation.
+The debug payload is composed centrally. Namespaces contribute status checks and
+debug panels through their manifest, while the portal owns redaction and presentation.
 Disabled namespaces still appear in the debug snapshot, but their tools are not mounted.
 
 ## Test
@@ -210,7 +209,7 @@ Create a module under `src/mcp_portal/namespaces/` with a `create_server(context
 factory and decorate it with the namespace manifest:
 
 ```python
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
 from mcp_portal.namespaces import (
     NamespaceContext,
@@ -256,7 +255,7 @@ def create_server(context: NamespaceContext) -> FastMCP:
     """
     server = FastMCP("Example")
 
-    @server.tool(tags={"example", "readonly"})
+    @server.tool(meta={"tags": ["example", "readonly"]})
     def hello(name: str) -> str:
         """Greet a user by name.
 
