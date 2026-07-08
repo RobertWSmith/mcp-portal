@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 AuthProviderName = Literal["none", "static", "jwt"]
 DatabaseProviderName = Literal["none", "oracle", "sqlalchemy"]
+ModelProviderName = Literal["openai", "azure_openai"]
 MongoDBCollectionName = Literal[
     "documents",
     "chat_history",
@@ -30,17 +31,19 @@ DEFAULT_TAG_SCOPE_RULES: dict[str, tuple[str, ...]] = {
     "external": ("external",),
     "write": ("write",),
 }
+OPENAI_API_KEY_PLACEHOLDER = "your-api-key"
+DEFAULT_AZURE_OPENAI_TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
 
 
 @dataclass(frozen=True)
 class OpenAISettings:
-    """OpenAI-related runtime settings.
+    """OpenAI platform runtime settings.
 
     Attributes:
-        api_key: Optional OpenAI API key used by namespaces that call OpenAI.
-        large_language_model: Model name for larger language-model tasks.
-        small_language_model: Model name for smaller language-model tasks.
-        embedding_model: Model name for embedding tasks.
+        api_key: Optional OpenAI platform API key.
+        large_language_model: OpenAI model name for larger language-model tasks.
+        small_language_model: OpenAI model name for smaller language-model tasks.
+        embedding_model: OpenAI model name for embedding tasks.
     """
 
     api_key: str | None
@@ -55,7 +58,7 @@ class OpenAISettings:
         Returns:
             True when `OPENAI_API_KEY` is set to a non-placeholder value.
         """
-        return bool(self.api_key and self.api_key != "your-api-key")
+        return bool(self.api_key and self.api_key != OPENAI_API_KEY_PLACEHOLDER)
 
     def public_snapshot(self) -> dict[str, str | bool]:
         """Return OpenAI settings safe to expose through development tools.
@@ -68,6 +71,107 @@ class OpenAISettings:
             "large_language_model": self.large_language_model,
             "small_language_model": self.small_language_model,
             "embedding_model": self.embedding_model,
+        }
+
+
+@dataclass(frozen=True)
+class AzureOpenAISettings:
+    """Azure OpenAI runtime settings.
+
+    Attributes:
+        endpoint: Azure OpenAI resource endpoint.
+        api_version: Azure OpenAI API version used by SDK clients.
+        token_scope: Azure resource scope requested from Azure Identity credentials.
+        large_language_model_deployment: Deployment name for larger language-model tasks.
+        small_language_model_deployment: Deployment name for smaller language-model tasks.
+        embedding_model_deployment: Deployment name for embedding tasks.
+    """
+
+    endpoint: str | None = None
+    api_version: str | None = None
+    token_scope: str = DEFAULT_AZURE_OPENAI_TOKEN_SCOPE
+    large_language_model_deployment: str | None = None
+    small_language_model_deployment: str | None = None
+    embedding_model_deployment: str | None = None
+
+    @property
+    def deployments_configured(self) -> bool:
+        """Report whether all model-role deployment names are configured.
+
+        Returns:
+            True when large, small, and embedding deployment names are set.
+        """
+        return bool(
+            self.large_language_model_deployment
+            and self.small_language_model_deployment
+            and self.embedding_model_deployment
+        )
+
+    @property
+    def configured(self) -> bool:
+        """Report whether Azure OpenAI has enough metadata for model calls.
+
+        Returns:
+            True when endpoint, API version, token scope, and deployment names are set.
+        """
+        return bool(
+            self.endpoint and self.api_version and self.token_scope and self.deployments_configured
+        )
+
+    def public_snapshot(self) -> dict[str, object]:
+        """Return Azure OpenAI settings safe to expose through development tools.
+
+        Returns:
+            Public Azure OpenAI metadata with secrets and endpoint values omitted.
+        """
+        return {
+            "auth_mode": "azure_identity",
+            "configured": self.configured,
+            "endpoint_configured": self.endpoint is not None,
+            "api_version": self.api_version,
+            "api_version_configured": self.api_version is not None,
+            "token_scope": self.token_scope,
+            "deployments_configured": self.deployments_configured,
+            "large_language_model_deployment": self.large_language_model_deployment,
+            "small_language_model_deployment": self.small_language_model_deployment,
+            "embedding_model_deployment": self.embedding_model_deployment,
+        }
+
+
+@dataclass(frozen=True)
+class AzureIdentitySettings:
+    """Azure Identity environment settings used by Azure SDK credentials.
+
+    Attributes:
+        tenant_id: Optional Azure tenant id for service-principal auth.
+        client_id: Optional Azure client/application id for service-principal auth.
+        client_secret: Optional Azure client secret for service-principal auth.
+    """
+
+    tenant_id: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
+
+    @property
+    def service_principal_configured(self) -> bool:
+        """Report whether service-principal environment credentials are complete.
+
+        Returns:
+            True when tenant id, client id, and client secret are configured.
+        """
+        return bool(self.tenant_id and self.client_id and self.client_secret)
+
+    def public_snapshot(self) -> dict[str, object]:
+        """Return Azure Identity settings safe to expose publicly.
+
+        Returns:
+            Public Azure Identity metadata with secrets omitted.
+        """
+        return {
+            "service_principal_configured": self.service_principal_configured,
+            "tenant_id_configured": self.tenant_id is not None,
+            "client_id_configured": self.client_id is not None,
+            "client_secret_configured": self.client_secret is not None,
         }
 
 
@@ -442,7 +546,10 @@ class Settings:
     """Runtime settings grouped by namespace or provider boundary.
 
     Attributes:
-        openai: Settings used by OpenAI-backed namespaces.
+        openai: Settings for direct OpenAI platform calls.
+        model_provider: Active model provider used by generic model settings.
+        azure_openai: Settings for Azure OpenAI model calls.
+        azure_identity: Azure Identity environment settings.
         health: Settings used by the health namespace.
         auth: Authentication settings used by HTTP production transports.
         authorization: Authorization policy applied by production middleware.
@@ -455,6 +562,9 @@ class Settings:
     """
 
     openai: OpenAISettings
+    model_provider: ModelProviderName = "openai"
+    azure_openai: AzureOpenAISettings = field(default_factory=AzureOpenAISettings)
+    azure_identity: AzureIdentitySettings = field(default_factory=AzureIdentitySettings)
     health: HealthSettings = field(default_factory=HealthSettings)
     auth: AuthSettings = field(default_factory=AuthSettings)
     authorization: AuthorizationSettings = field(default_factory=AuthorizationSettings)
@@ -487,6 +597,26 @@ class Settings:
                 large_language_model=os.getenv("OPENAI_LARGE_LANGUAGE_MODEL", "gpt-5.5"),
                 small_language_model=os.getenv("OPENAI_SMALL_LANGUAGE_MODEL", "gpt-5.5-mini"),
                 embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large"),
+            ),
+            model_provider=_model_provider_env("MCP_PORTAL_MODEL_PROVIDER", default="openai"),
+            azure_openai=AzureOpenAISettings(
+                endpoint=_optional_env("AZURE_OPENAI_ENDPOINT"),
+                api_version=_optional_env("AZURE_OPENAI_API_VERSION"),
+                token_scope=(
+                    _optional_env("AZURE_OPENAI_TOKEN_SCOPE") or DEFAULT_AZURE_OPENAI_TOKEN_SCOPE
+                ),
+                large_language_model_deployment=_optional_env(
+                    "AZURE_OPENAI_LARGE_LANGUAGE_MODEL_DEPLOYMENT"
+                ),
+                small_language_model_deployment=_optional_env(
+                    "AZURE_OPENAI_SMALL_LANGUAGE_MODEL_DEPLOYMENT"
+                ),
+                embedding_model_deployment=_optional_env("AZURE_OPENAI_EMBEDDING_MODEL_DEPLOYMENT"),
+            ),
+            azure_identity=AzureIdentitySettings(
+                tenant_id=_optional_env("AZURE_TENANT_ID"),
+                client_id=_optional_env("AZURE_CLIENT_ID"),
+                client_secret=_optional_env("AZURE_CLIENT_SECRET"),
             ),
             health=HealthSettings(
                 enabled=_bool_env("MCP_PORTAL_HEALTH_ENABLED", default=True),
@@ -551,10 +681,10 @@ class Settings:
 
     @property
     def openai_api_key(self) -> str | None:
-        """Return the configured OpenAI API key.
+        """Return the configured OpenAI platform API key.
 
         Returns:
-            The optional OpenAI API key.
+            The optional OpenAI platform API key.
         """
         return self.openai.api_key
 
@@ -587,12 +717,66 @@ class Settings:
 
     @property
     def has_openai_api_key(self) -> bool:
-        """Report whether a non-placeholder OpenAI API key is configured.
+        """Report whether a non-placeholder OpenAI platform API key is configured.
 
         Returns:
             True when `OPENAI_API_KEY` is set to a non-placeholder value.
         """
         return self.openai.has_api_key
+
+    @property
+    def model_provider_configured(self) -> bool:
+        """Report whether the active model provider has required settings.
+
+        Returns:
+            True when the selected provider has enough non-secret metadata for model calls.
+        """
+        if self.model_provider == "azure_openai":
+            return self.azure_openai.configured
+
+        return self.openai.has_api_key
+
+    @property
+    def large_language_model(self) -> str:
+        """Return the active provider's large language model or deployment name.
+
+        Returns:
+            The configured large model identifier for the active model provider.
+        """
+        if (
+            self.model_provider == "azure_openai"
+            and self.azure_openai.large_language_model_deployment
+        ):
+            return self.azure_openai.large_language_model_deployment
+
+        return self.openai.large_language_model
+
+    @property
+    def small_language_model(self) -> str:
+        """Return the active provider's small language model or deployment name.
+
+        Returns:
+            The configured small model identifier for the active model provider.
+        """
+        if (
+            self.model_provider == "azure_openai"
+            and self.azure_openai.small_language_model_deployment
+        ):
+            return self.azure_openai.small_language_model_deployment
+
+        return self.openai.small_language_model
+
+    @property
+    def embedding_model(self) -> str:
+        """Return the active provider's embedding model or deployment name.
+
+        Returns:
+            The configured embedding model identifier for the active model provider.
+        """
+        if self.model_provider == "azure_openai" and self.azure_openai.embedding_model_deployment:
+            return self.azure_openai.embedding_model_deployment
+
+        return self.openai.embedding_model
 
     def namespace_enabled(self, name: str) -> bool:
         """Report whether a namespace should mount its tools.
@@ -614,7 +798,10 @@ class Settings:
             Grouped public runtime settings.
         """
         return {
+            "model_provider": self._model_provider_public_snapshot(),
             "openai": self.openai.public_snapshot(),
+            "azure_openai": self.azure_openai.public_snapshot(),
+            "azure_identity": self.azure_identity.public_snapshot(),
             "health": self.health.public_snapshot(),
             "auth": self.auth.public_snapshot(),
             "authorization": self.authorization.public_snapshot(),
@@ -624,6 +811,21 @@ class Settings:
             "observability": self.observability.public_snapshot(),
             "database": self.database.public_snapshot(),
             "mongodb": self.mongodb.public_snapshot(),
+        }
+
+    def _model_provider_public_snapshot(self) -> dict[str, object]:
+        """Return active model provider settings safe to expose publicly.
+
+        Returns:
+            Generic model-provider metadata with provider-specific secrets omitted.
+        """
+        return {
+            "provider": self.model_provider,
+            "configured": self.model_provider_configured,
+            "auth_mode": "azure_identity" if self.model_provider == "azure_openai" else "api_key",
+            "large_language_model": self.large_language_model,
+            "small_language_model": self.small_language_model,
+            "embedding_model": self.embedding_model,
         }
 
 
@@ -785,6 +987,22 @@ def _database_provider_env(name: str, *, default: DatabaseProviderName) -> Datab
     """
     value = (_optional_env(name) or default).lower()
     if value in {"none", "oracle", "sqlalchemy"}:
+        return value
+    return default
+
+
+def _model_provider_env(name: str, *, default: ModelProviderName) -> ModelProviderName:
+    """Read a model provider name.
+
+    Args:
+        name: Environment variable name to read.
+        default: Provider returned when the value is absent or unsupported.
+
+    Returns:
+        A supported model provider name.
+    """
+    value = (_optional_env(name) or default).lower().replace("-", "_")
+    if value in {"openai", "azure_openai"}:
         return value
     return default
 

@@ -70,15 +70,15 @@ async def test_debug_ui_provider_renders_dashboard(settings: Settings) -> None:
     }
 
 
-async def test_debug_ui_marks_missing_api_key() -> None:
-    """Verify the dashboard handles missing OpenAI credentials."""
+async def test_debug_ui_marks_missing_model_provider_settings() -> None:
+    """Verify the dashboard handles missing provider settings."""
     settings = create_test_settings(openai_api_key=None)
     debug_app = create_debug_app(settings)
 
     async with Client(debug_app) as client:
         dashboard_result = await client.call_tool("portal_debug", {})
 
-    assert '"has_api_key": false' in dashboard_result.data["state"]["snapshot_text"]
+    assert '"configured": false' in dashboard_result.data["state"]["snapshot_text"]
 
 
 def test_namespace_registration_decorator_records_factory(monkeypatch) -> None:
@@ -95,7 +95,7 @@ def test_namespace_registration_decorator_records_factory(monkeypatch) -> None:
         Returns:
             A configured FastMCP child server.
         """
-        return FastMCP(f"Example {context.settings.openai_large_language_model}")
+        return FastMCP(f"Example {context.settings.large_language_model}")
 
     decorated = namespace_registry.register_namespace(
         "example",
@@ -128,7 +128,7 @@ def test_namespace_registration_rejects_duplicate_names(monkeypatch) -> None:
         Returns:
             A configured FastMCP child server.
         """
-        return FastMCP(f"First {context.settings.openai_large_language_model}")
+        return FastMCP(f"First {context.settings.large_language_model}")
 
     def create_second_server(context: NamespaceContext) -> FastMCP:
         """Create a second placeholder namespace server.
@@ -139,7 +139,7 @@ def test_namespace_registration_rejects_duplicate_names(monkeypatch) -> None:
         Returns:
             A configured FastMCP child server.
         """
-        return FastMCP(f"Second {context.settings.openai_large_language_model}")
+        return FastMCP(f"Second {context.settings.large_language_model}")
 
     namespace_registry.register_namespace("example")(create_first_server)
 
@@ -168,7 +168,7 @@ async def test_custom_namespace_registry(settings: Settings) -> None:
             Returns:
                 The large language model from test settings.
             """
-            return context.settings.openai_large_language_model
+            return context.settings.large_language_model
 
         return server
 
@@ -201,14 +201,40 @@ async def test_health_ping(client: Client) -> None:
 
 
 async def test_runtime_config_does_not_expose_secret(client: Client) -> None:
-    """Verify public runtime config omits the raw API key value."""
+    """Verify public runtime config omits raw secret values."""
     result = await client.call_tool("health_runtime_config", {})
 
+    assert result.data["model_provider"] == {
+        "provider": "openai",
+        "configured": True,
+        "auth_mode": "api_key",
+        "large_language_model": "large-model",
+        "small_language_model": "small-model",
+        "embedding_model": "embedding-model",
+    }
     assert result.data["openai"] == {
         "has_api_key": True,
         "large_language_model": "large-model",
         "small_language_model": "small-model",
         "embedding_model": "embedding-model",
+    }
+    assert result.data["azure_openai"] == {
+        "auth_mode": "azure_identity",
+        "configured": False,
+        "endpoint_configured": False,
+        "api_version": None,
+        "api_version_configured": False,
+        "token_scope": "https://cognitiveservices.azure.com/.default",
+        "deployments_configured": False,
+        "large_language_model_deployment": None,
+        "small_language_model_deployment": None,
+        "embedding_model_deployment": None,
+    }
+    assert result.data["azure_identity"] == {
+        "service_principal_configured": False,
+        "tenant_id_configured": False,
+        "client_id_configured": False,
+        "client_secret_configured": False,
     }
     assert result.data["health"] == {"enabled": True}
     assert result.data["auth"]["enabled"] is False

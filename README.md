@@ -19,10 +19,10 @@ The scaffold reads the existing environment variables from `.env.example`. See
 [docs/environment-variables.md](docs/environment-variables.md) for defaults,
 accepted values, loading behavior, and production requirements.
 
-- `OPENAI_API_KEY`
-- `OPENAI_LARGE_LANGUAGE_MODEL`
-- `OPENAI_SMALL_LANGUAGE_MODEL`
-- `OPENAI_EMBEDDING_MODEL`
+- `MCP_PORTAL_MODEL_PROVIDER` selects `openai` or `azure_openai`
+- `AZURE_OPENAI_*` for Azure OpenAI endpoint, API version, token scope, and deployments
+- `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` for optional service-principal auth
+- `OPENAI_API_KEY` and `OPENAI_*_MODEL` only when using the direct OpenAI provider
 - `MCP_PORTAL_HEALTH_ENABLED`
 - `MCP_PORTAL_AUTH_*` for HTTP authentication
 - `MCP_PORTAL_AUTHZ_TAG_SCOPES` for tag policy metadata
@@ -32,7 +32,7 @@ accepted values, loading behavior, and production requirements.
 - `OTEL_SERVICE_NAME` and `OTEL_EXPORTER_OTLP_ENDPOINT`
 
 The health namespace exposes only non-secret configuration metadata. It never returns
-the raw API key.
+raw API keys or Azure client secrets.
 
 ## Run
 
@@ -263,7 +263,7 @@ def example_debug_panel(context: NamespaceContext) -> NamespaceDebugPanel:
     return NamespaceDebugPanel(
         title="Example Namespace",
         summary="Example tools and runtime metadata.",
-        snapshot={"large_model": context.settings.openai.large_language_model},
+        snapshot={"large_model": context.settings.large_language_model},
     )
 
 

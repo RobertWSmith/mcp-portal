@@ -86,7 +86,9 @@ class Redactor:
             True when the key conventionally stores a secret value.
         """
         normalized = key.lower().replace("-", "_")
-        if normalized.startswith(("has_", "is_", "uses_")):
+        if normalized.startswith(("has_", "is_", "uses_")) or normalized.endswith(
+            ("_configured", "_scope", "_scopes")
+        ):
             return False
 
         return (

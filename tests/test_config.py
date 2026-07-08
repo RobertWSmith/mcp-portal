@@ -8,10 +8,20 @@ import pytest
 from mcp_portal.config import Settings, _bool_env, _optional_env, _resolve_env_file
 
 PORTAL_ENV_NAMES = (
+    "MCP_PORTAL_MODEL_PROVIDER",
     "OPENAI_API_KEY",
     "OPENAI_LARGE_LANGUAGE_MODEL",
     "OPENAI_SMALL_LANGUAGE_MODEL",
     "OPENAI_EMBEDDING_MODEL",
+    "AZURE_OPENAI_ENDPOINT",
+    "AZURE_OPENAI_API_VERSION",
+    "AZURE_OPENAI_TOKEN_SCOPE",
+    "AZURE_OPENAI_LARGE_LANGUAGE_MODEL_DEPLOYMENT",
+    "AZURE_OPENAI_SMALL_LANGUAGE_MODEL_DEPLOYMENT",
+    "AZURE_OPENAI_EMBEDDING_MODEL_DEPLOYMENT",
+    "AZURE_TENANT_ID",
+    "AZURE_CLIENT_ID",
+    "AZURE_CLIENT_SECRET",
     "MCP_PORTAL_HEALTH_ENABLED",
     "MCP_PORTAL_AUTH_PROVIDER",
     "MCP_PORTAL_AUTH_REQUIRED_SCOPES",
@@ -76,6 +86,16 @@ def test_settings_from_explicit_env_file(tmp_path: Path, monkeypatch) -> None:
                 "OPENAI_LARGE_LANGUAGE_MODEL=large-from-file",
                 "OPENAI_SMALL_LANGUAGE_MODEL=small-from-file",
                 "OPENAI_EMBEDDING_MODEL=embedding-from-file",
+                "MCP_PORTAL_MODEL_PROVIDER=azure_openai",
+                "AZURE_OPENAI_ENDPOINT=https://portal-test.openai.azure.com/",
+                "AZURE_OPENAI_API_VERSION=2025-01-01",
+                "AZURE_OPENAI_TOKEN_SCOPE=https://example.azure/.default",
+                "AZURE_OPENAI_LARGE_LANGUAGE_MODEL_DEPLOYMENT=azure-large-from-file",
+                "AZURE_OPENAI_SMALL_LANGUAGE_MODEL_DEPLOYMENT=azure-small-from-file",
+                "AZURE_OPENAI_EMBEDDING_MODEL_DEPLOYMENT=azure-embedding-from-file",
+                "AZURE_TENANT_ID=tenant-from-file",
+                "AZURE_CLIENT_ID=client-from-file",
+                "AZURE_CLIENT_SECRET=secret-from-file",
                 "MCP_PORTAL_HEALTH_ENABLED=false",
             ]
         ),
@@ -87,13 +107,44 @@ def test_settings_from_explicit_env_file(tmp_path: Path, monkeypatch) -> None:
     settings = Settings.from_env(env_file)
 
     assert settings.openai_api_key == "from-file"
+    assert settings.model_provider == "azure_openai"
+    assert settings.model_provider_configured is True
+    assert settings.large_language_model == "azure-large-from-file"
+    assert settings.small_language_model == "azure-small-from-file"
+    assert settings.embedding_model == "azure-embedding-from-file"
     assert settings.namespace_enabled("health") is False
     snapshot = settings.public_snapshot()
+    assert snapshot["model_provider"] == {
+        "provider": "azure_openai",
+        "configured": True,
+        "auth_mode": "azure_identity",
+        "large_language_model": "azure-large-from-file",
+        "small_language_model": "azure-small-from-file",
+        "embedding_model": "azure-embedding-from-file",
+    }
     assert snapshot["openai"] == {
         "has_api_key": True,
         "large_language_model": "large-from-file",
         "small_language_model": "small-from-file",
         "embedding_model": "embedding-from-file",
+    }
+    assert snapshot["azure_openai"] == {
+        "auth_mode": "azure_identity",
+        "configured": True,
+        "endpoint_configured": True,
+        "api_version": "2025-01-01",
+        "api_version_configured": True,
+        "token_scope": "https://example.azure/.default",
+        "deployments_configured": True,
+        "large_language_model_deployment": "azure-large-from-file",
+        "small_language_model_deployment": "azure-small-from-file",
+        "embedding_model_deployment": "azure-embedding-from-file",
+    }
+    assert snapshot["azure_identity"] == {
+        "service_principal_configured": True,
+        "tenant_id_configured": True,
+        "client_id_configured": True,
+        "client_secret_configured": True,
     }
     assert snapshot["health"] == {"enabled": False}
     assert snapshot["auth"]["provider"] == "none"
@@ -188,9 +239,7 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
     assert settings.database.oracle_pool_min == 2
     assert settings.database.oracle_pool_max == 8
     assert settings.mongodb.configured is True
-    assert settings.mongodb.connection_string == (
-        "mongodb+srv://user:secret@cluster.example/test"
-    )
+    assert settings.mongodb.connection_string == ("mongodb+srv://user:secret@cluster.example/test")
     assert settings.mongodb.database_name == "portal"
     assert settings.mongodb.collection_name("documents") == "documents"
     assert settings.mongodb.collection_name("chat_history") == "chat_history"
@@ -210,12 +259,40 @@ def test_settings_defaults_and_placeholder_key(monkeypatch) -> None:
     settings = Settings.from_env(env_file=Path("does-not-exist.env"))
 
     assert settings.has_openai_api_key is False
+    assert settings.model_provider == "openai"
+    assert settings.model_provider_configured is False
     snapshot = settings.public_snapshot()
+    assert snapshot["model_provider"] == {
+        "provider": "openai",
+        "configured": False,
+        "auth_mode": "api_key",
+        "large_language_model": "gpt-5.5",
+        "small_language_model": "gpt-5.5-mini",
+        "embedding_model": "text-embedding-3-large",
+    }
     assert snapshot["openai"] == {
         "has_api_key": False,
         "large_language_model": "gpt-5.5",
         "small_language_model": "gpt-5.5-mini",
         "embedding_model": "text-embedding-3-large",
+    }
+    assert snapshot["azure_openai"] == {
+        "auth_mode": "azure_identity",
+        "configured": False,
+        "endpoint_configured": False,
+        "api_version": None,
+        "api_version_configured": False,
+        "token_scope": "https://cognitiveservices.azure.com/.default",
+        "deployments_configured": False,
+        "large_language_model_deployment": None,
+        "small_language_model_deployment": None,
+        "embedding_model_deployment": None,
+    }
+    assert snapshot["azure_identity"] == {
+        "service_principal_configured": False,
+        "tenant_id_configured": False,
+        "client_id_configured": False,
+        "client_secret_configured": False,
     }
     assert snapshot["health"] == {"enabled": True}
     assert snapshot["auth"]["enabled"] is False
@@ -225,6 +302,43 @@ def test_settings_defaults_and_placeholder_key(monkeypatch) -> None:
     assert snapshot["namespace_discovery"] == {"strict": False}
     assert snapshot["database"]["oracle_preferred"] is True
     assert snapshot["mongodb"]["configured"] is False
+
+
+def test_azure_openai_provider_uses_azure_identity_without_service_principal(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify Azure OpenAI uses Azure Identity without requiring API-key settings."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "MCP_PORTAL_MODEL_PROVIDER=azure_openai",
+                "AZURE_OPENAI_ENDPOINT=https://portal-test.openai.azure.com/",
+                "AZURE_OPENAI_API_VERSION=2025-01-01",
+                "AZURE_OPENAI_LARGE_LANGUAGE_MODEL_DEPLOYMENT=azure-large",
+                "AZURE_OPENAI_SMALL_LANGUAGE_MODEL_DEPLOYMENT=azure-small",
+                "AZURE_OPENAI_EMBEDDING_MODEL_DEPLOYMENT=azure-embedding",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for name in PORTAL_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings.from_env(env_file)
+
+    assert settings.model_provider == "azure_openai"
+    assert settings.model_provider_configured is True
+    assert settings.azure_identity.service_principal_configured is False
+    assert settings.public_snapshot()["model_provider"] == {
+        "provider": "azure_openai",
+        "configured": True,
+        "auth_mode": "azure_identity",
+        "large_language_model": "azure-large",
+        "small_language_model": "azure-small",
+        "embedding_model": "azure-embedding",
+    }
 
 
 def test_settings_from_env_file_can_override_existing_values(tmp_path: Path, monkeypatch) -> None:

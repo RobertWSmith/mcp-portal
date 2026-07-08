@@ -88,10 +88,20 @@ def test_server_main_rebuilds_server_for_env_file_and_debug_option(
     captured = {}
 
     for name in (
+        "MCP_PORTAL_MODEL_PROVIDER",
         "OPENAI_API_KEY",
         "OPENAI_LARGE_LANGUAGE_MODEL",
         "OPENAI_SMALL_LANGUAGE_MODEL",
         "OPENAI_EMBEDDING_MODEL",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_VERSION",
+        "AZURE_OPENAI_TOKEN_SCOPE",
+        "AZURE_OPENAI_LARGE_LANGUAGE_MODEL_DEPLOYMENT",
+        "AZURE_OPENAI_SMALL_LANGUAGE_MODEL_DEPLOYMENT",
+        "AZURE_OPENAI_EMBEDDING_MODEL_DEPLOYMENT",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OPENAI_LARGE_LANGUAGE_MODEL", "from-env")

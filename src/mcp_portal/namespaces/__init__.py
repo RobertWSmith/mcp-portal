@@ -248,6 +248,7 @@ def build_namespace_runtimes(
     shared_redactor = redactor or Redactor.from_secrets(
         (
             settings.openai.api_key,
+            settings.azure_identity.client_secret,
             settings.auth.static_token,
             settings.auth.jwt_public_key,
             settings.database.sqlalchemy_url,

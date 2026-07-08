@@ -69,10 +69,15 @@ def create_debug_app(
             A Prefab app payload containing runtime settings and namespace diagnostics.
         """
         snapshot = _runtime_snapshot(settings, namespace_runtimes)
-        openai_snapshot = snapshot["settings"]["openai"]
-        api_key_variant = "success" if openai_snapshot["has_api_key"] else "warning"
-        api_key_label = (
-            "API key configured" if openai_snapshot["has_api_key"] else "API key missing"
+        model_provider_snapshot = snapshot["settings"]["model_provider"]
+        provider_configured = bool(model_provider_snapshot["configured"])
+        provider_name = str(model_provider_snapshot["provider"])
+        provider_label = _model_provider_label(provider_name)
+        provider_status_variant = "success" if provider_configured else "warning"
+        provider_status_label = (
+            f"{provider_label} configured"
+            if provider_configured
+            else f"{provider_label} settings missing"
         )
 
         with Column(gap=4, css_class="max-w-5xl mx-auto") as view:
@@ -80,27 +85,30 @@ def create_debug_app(
                 with CardHeader():
                     with Row(gap=2, align="center", css_class="justify-between"):
                         CardTitle("MCP Portal Debug")
-                        Badge(api_key_label, variant=api_key_variant)
+                        Badge(provider_status_label, variant=provider_status_variant)
                     CardDescription("Runtime status for the local FastMCP development UI.")
 
-            with Grid(columns={"default": 1, "md": 3}, gap=3):
+            with Grid(columns={"default": 1, "md": 4}, gap=3):
+                with Card():
+                    with CardContent(css_class="p-4"):
+                        Metric(label="Model provider", value=provider_label)
                 with Card():
                     with CardContent(css_class="p-4"):
                         Metric(
                             label="Large model",
-                            value=str(openai_snapshot["large_language_model"]),
+                            value=str(model_provider_snapshot["large_language_model"]),
                         )
                 with Card():
                     with CardContent(css_class="p-4"):
                         Metric(
                             label="Small model",
-                            value=str(openai_snapshot["small_language_model"]),
+                            value=str(model_provider_snapshot["small_language_model"]),
                         )
                 with Card():
                     with CardContent(css_class="p-4"):
                         Metric(
                             label="Embedding model",
-                            value=str(openai_snapshot["embedding_model"]),
+                            value=str(model_provider_snapshot["embedding_model"]),
                         )
 
             Text("Namespaces", css_class="font-medium text-sm")
@@ -335,3 +343,17 @@ def _status_variant(state: str) -> str:
     if state == "disabled":
         return "secondary"
     return "destructive"
+
+
+def _model_provider_label(provider: str) -> str:
+    """Return a readable label for a configured model provider.
+
+    Args:
+        provider: Provider identifier from runtime settings.
+
+    Returns:
+        Human-readable provider label.
+    """
+    if provider == "azure_openai":
+        return "Azure OpenAI"
+    return "OpenAI"

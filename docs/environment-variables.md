@@ -19,14 +19,51 @@ override values in your shell, deployment platform, or an explicit dotenv file.
 - Comma-separated lists may also use spaces, so `scope-a,scope-b` and
   `scope-a scope-b` are equivalent.
 
-## OpenAI Settings
+## Model Provider Settings
+
+`MCP_PORTAL_MODEL_PROVIDER` selects the active model provider. Direct OpenAI and
+Azure OpenAI settings can exist side-by-side; the generic `Settings.large_language_model`,
+`Settings.small_language_model`, and `Settings.embedding_model` properties resolve to
+the active provider's model or deployment names.
 
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | unset | No | API key used by namespaces that call OpenAI. The placeholder value `your-api-key` is treated as not configured in public status snapshots. |
+| `MCP_PORTAL_MODEL_PROVIDER` | `openai` | No | Active model provider. Accepted values are `openai` and `azure_openai`; unsupported values fall back to `openai`. |
+
+### Direct OpenAI
+
+These settings are used only when `MCP_PORTAL_MODEL_PROVIDER=openai`.
+
+| Variable | Default | Required | Description |
+| --- | --- | --- | --- |
+| `OPENAI_API_KEY` | unset | Required when provider is `openai` | Direct OpenAI platform API key. The placeholder value `your-api-key` is treated as not configured in public status snapshots. |
 | `OPENAI_LARGE_LANGUAGE_MODEL` | `gpt-5.5` | No | Model name for larger language-model tasks. |
 | `OPENAI_SMALL_LANGUAGE_MODEL` | `gpt-5.5-mini` | No | Model name for smaller language-model tasks. |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-large` | No | Model name for embedding tasks. |
+
+### Azure OpenAI
+
+Azure OpenAI uses Azure Identity / RBAC. MCP Portal does not read an Azure OpenAI API
+key. Service principals are represented through the standard Azure Identity environment
+variables, and managed identity, workload identity, Azure CLI login, or other
+`DefaultAzureCredential` sources can be used without setting those values.
+
+| Variable | Default | Required | Description |
+| --- | --- | --- | --- |
+| `AZURE_OPENAI_ENDPOINT` | unset | Required when provider is `azure_openai` | Azure OpenAI resource endpoint. The raw endpoint is omitted from public settings snapshots. |
+| `AZURE_OPENAI_API_VERSION` | unset | Required when provider is `azure_openai` | Azure OpenAI API version passed to SDK clients. |
+| `AZURE_OPENAI_TOKEN_SCOPE` | `https://cognitiveservices.azure.com/.default` | No | Token scope requested from Azure Identity credentials. |
+| `AZURE_OPENAI_LARGE_LANGUAGE_MODEL_DEPLOYMENT` | unset | Required when provider is `azure_openai` | Azure OpenAI deployment name for larger language-model tasks. |
+| `AZURE_OPENAI_SMALL_LANGUAGE_MODEL_DEPLOYMENT` | unset | Required when provider is `azure_openai` | Azure OpenAI deployment name for smaller language-model tasks. |
+| `AZURE_OPENAI_EMBEDDING_MODEL_DEPLOYMENT` | unset | Required when provider is `azure_openai` | Azure OpenAI deployment name for embedding tasks. |
+
+Optional service-principal environment variables consumed by Azure Identity:
+
+| Variable | Default | Required | Description |
+| --- | --- | --- | --- |
+| `AZURE_TENANT_ID` | unset | Required for service-principal auth | Azure tenant id. |
+| `AZURE_CLIENT_ID` | unset | Required for service-principal auth | Azure application/client id. Also used by some managed identity flows. |
+| `AZURE_CLIENT_SECRET` | unset | Required for service-principal auth | Azure client secret. This value is omitted from public settings snapshots and redacted from diagnostics. |
 
 ## Health And HTTP Settings
 
@@ -195,6 +232,7 @@ FastMCP emits OpenTelemetry spans when launched with an OpenTelemetry SDK or
 
 ## Secret Handling
 
-Secret-bearing values such as `OPENAI_API_KEY`, static bearer tokens, JWT keys,
-database URLs, Oracle passwords, and MongoDB connection strings are omitted from public
-settings snapshots. Status tools expose only whether those values are configured.
+Secret-bearing values such as `OPENAI_API_KEY`, `AZURE_CLIENT_SECRET`, static bearer
+tokens, JWT keys, database URLs, Oracle passwords, and MongoDB connection strings are
+omitted from public settings snapshots. Status tools expose only whether those values
+are configured.

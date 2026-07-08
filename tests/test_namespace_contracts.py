@@ -79,11 +79,17 @@ def test_namespace_context_exposes_standard_services() -> None:
     """Verify test contexts provide loggers, clocks, redaction, and settings."""
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     context = create_namespace_test_context(clock=lambda: now)
+    azure_context = create_namespace_test_context(
+        settings=create_test_settings(azure_client_secret="azure-secret")
+    )
 
     assert context.name == "test"
     assert context.now() == now
     assert context.logger.name == "mcp_portal.namespaces.test"
     assert context.public_snapshot({"api_key": "test-key"}) == {"api_key": "[REDACTED]"}
+    assert azure_context.public_snapshot(
+        {"client_secret": "azure-secret", "message": "using azure-secret"}
+    ) == {"client_secret": "[REDACTED]", "message": "using [REDACTED]"}
 
 
 async def test_disabled_namespace_is_visible_but_not_mounted() -> None:
@@ -109,7 +115,7 @@ async def test_namespace_test_client_mounts_one_namespace() -> None:
 
         @server.tool(meta={"tags": ["example", "readonly"]})
         def configured_model() -> str:
-            return context.settings.openai_large_language_model
+            return context.settings.large_language_model
 
         return server
 
