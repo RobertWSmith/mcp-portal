@@ -346,7 +346,7 @@ def test_langchain_mongodb_connector_helpers_use_configured_defaults(monkeypatch
         database_name="portal",
         vector_search_index="portal_vector",
     )
-    connector = clients_module.LangChainMongoDBConnectors(settings)
+    connector = clients_module.MongoDBConnectors(settings)
     captured = {}
 
     class FakeCache:
@@ -445,7 +445,7 @@ def test_langchain_mongodb_connector_helpers_use_configured_defaults(monkeypatch
 
 def test_langchain_mongodb_connector_reports_missing_required_settings() -> None:
     """Verify helper methods fail clearly when required MongoDB settings are absent."""
-    connector = clients_module.LangChainMongoDBConnectors(
+    connector = clients_module.MongoDBConnectors(
         MongoDBSettings(connection_string="mongodb://cluster.example")
     )
 
@@ -455,11 +455,11 @@ def test_langchain_mongodb_connector_reports_missing_required_settings() -> None
     with pytest.raises(ConfigurationPortalError, match="database name"):
         connector.agent_database()
 
-    missing_uri_connector = clients_module.LangChainMongoDBConnectors(MongoDBSettings())
+    missing_uri_connector = clients_module.MongoDBConnectors(MongoDBSettings())
     with pytest.raises(ConfigurationPortalError, match="CONNECTION_STRING"):
         _ = missing_uri_connector.connection_string
 
-    configured_connector = clients_module.LangChainMongoDBConnectors(
+    configured_connector = clients_module.MongoDBConnectors(
         MongoDBSettings(
             connection_string="mongodb://cluster.example",
             database_name="portal",

@@ -317,7 +317,7 @@ def add_operational_routes(server: FastMCP, settings: Settings) -> FastMCP:
                 "sqlalchemy_enforced": True,
                 "database_configured": settings.database.sqlalchemy_configured,
                 "oracle_configured": settings.database.oracle_configured,
-                "langchain_mongodb_configured": settings.mongodb.configured,
+                "mongodb_configured": settings.mongodb.configured,
             }
         )
 

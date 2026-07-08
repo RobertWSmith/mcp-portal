@@ -146,14 +146,14 @@ class ClientFactories:
 
 
 @dataclass(frozen=True)
-class LangChainMongoDBConnectors:
-    """Convenience factory for LangChain MongoDB integration objects.
+class MongoDBConnectors:
+    """Convenience factory for MongoDB integration objects.
 
     The connector keeps MongoDB support independent from the SQLAlchemy database
     provider switch. Namespaces supply embeddings or per-use overrides as needed.
 
     Attributes:
-        settings: Runtime settings for LangChain MongoDB connectors.
+        settings: Runtime settings for MongoDB connectors.
     """
 
     settings: MongoDBSettings
@@ -170,9 +170,8 @@ class LangChainMongoDBConnectors:
         """
         if self.settings.connection_string is None:
             raise ConfigurationPortalError(
-                "LangChain MongoDB connectors require "
-                "MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING.",
-                details={"client": "langchain_mongodb"},
+                "MongoDB connectors require MCP_PORTAL_MONGODB_CONNECTION_STRING.",
+                details={"client": "mongodb"},
             )
         return self.settings.connection_string
 
@@ -540,7 +539,7 @@ def default_client_factories(settings: Settings | None = None) -> ClientFactorie
     return factories
 
 
-def _create_langchain_mongodb_connectors(settings: Settings) -> LangChainMongoDBConnectors:
+def _create_langchain_mongodb_connectors(settings: Settings) -> MongoDBConnectors:
     """Create LangChain MongoDB connector helpers from runtime settings.
 
     Args:
@@ -569,7 +568,7 @@ def _create_langchain_mongodb_connectors(settings: Settings) -> LangChainMongoDB
             cause=error,
         ) from error
 
-    return LangChainMongoDBConnectors(settings.mongodb)
+    return MongoDBConnectors(settings.mongodb)
 
 
 def _create_sqlalchemy_engine(settings: Settings) -> Any:
