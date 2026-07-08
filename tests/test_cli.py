@@ -261,3 +261,22 @@ assert any(Path(path).resolve() == src_path.resolve() for path in sys.path)
         capture_output=True,
         text=True,
     )
+
+
+def test_server_file_runs_as_script_without_src_on_pythonpath() -> None:
+    """Verify `mcp dev src/mcp_portal/server.py` launches the server script."""
+    repo_root = Path(__file__).resolve().parents[1]
+    server_file = repo_root / "src" / "mcp_portal" / "server.py"
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    result = subprocess.run(
+        [sys.executable, str(server_file), "--help"],
+        cwd=repo_root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "Run the MCP Portal FastMCP server." in result.stdout

@@ -317,7 +317,7 @@ def add_operational_routes(server: FastMCP, settings: Settings) -> FastMCP:
                 "sqlalchemy_enforced": True,
                 "database_configured": settings.database.sqlalchemy_configured,
                 "oracle_configured": settings.database.oracle_configured,
-                "langchain_mongodb_configured": settings.langchain_mongodb.configured,
+                "langchain_mongodb_configured": settings.mongodb.configured,
             }
         )
 
@@ -537,3 +537,7 @@ def _transport_kwargs(options: argparse.Namespace) -> dict[str, Any]:
                 kwargs[name] = value
 
     return kwargs
+
+
+if __name__ == "__main__":
+    main()

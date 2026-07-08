@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mcp_portal.config import (
-    LangChainMongoDBCollectionName,
-    LangChainMongoDBSettings,
+    MongoDBCollectionName,
+    MongoDBSettings,
     Settings,
 )
 from mcp_portal.errors import ConfigurationPortalError
@@ -156,7 +156,7 @@ class LangChainMongoDBConnectors:
         settings: Runtime settings for LangChain MongoDB connectors.
     """
 
-    settings: LangChainMongoDBSettings
+    settings: MongoDBSettings
 
     @property
     def connection_string(self) -> str:
@@ -190,7 +190,7 @@ class LangChainMongoDBConnectors:
         embedding: Any,
         *,
         database_name: str | None = None,
-        collection: LangChainMongoDBCollectionName = "documents",
+        collection: MongoDBCollectionName = "documents",
         index_name: str | None = None,
         **kwargs: Any,
     ) -> Any:
@@ -228,7 +228,7 @@ class LangChainMongoDBConnectors:
         session_id: str,
         *,
         database_name: str | None = None,
-        collection: LangChainMongoDBCollectionName = "chat_history",
+        collection: MongoDBCollectionName = "chat_history",
         **kwargs: Any,
     ) -> Any:
         """Create a MongoDB-backed LangChain chat message history.
@@ -257,7 +257,7 @@ class LangChainMongoDBConnectors:
         self,
         *,
         database_name: str | None = None,
-        collection: LangChainMongoDBCollectionName = "cache",
+        collection: MongoDBCollectionName = "cache",
         **kwargs: Any,
     ) -> Any:
         """Create a MongoDB-backed LangChain cache.
@@ -285,7 +285,7 @@ class LangChainMongoDBConnectors:
         embedding: Any,
         *,
         database_name: str | None = None,
-        collection: LangChainMongoDBCollectionName = "semantic_cache",
+        collection: MongoDBCollectionName = "semantic_cache",
         index_name: str | None = None,
         **kwargs: Any,
     ) -> Any:
@@ -321,7 +321,7 @@ class LangChainMongoDBConnectors:
         self,
         *,
         database_name: str | None = None,
-        collection: LangChainMongoDBCollectionName = "documents",
+        collection: MongoDBCollectionName = "documents",
         **kwargs: Any,
     ) -> Any:
         """Create a MongoDB document loader.
@@ -351,7 +351,7 @@ class LangChainMongoDBConnectors:
         self,
         *,
         database_name: str | None = None,
-        collection: LangChainMongoDBCollectionName = "documents",
+        collection: MongoDBCollectionName = "documents",
         **kwargs: Any,
     ) -> Any:
         """Create a MongoDB-backed LangChain docstore.
@@ -415,7 +415,7 @@ class LangChainMongoDBConnectors:
         self,
         *,
         database_name: str | None,
-        collection: LangChainMongoDBCollectionName,
+        collection: MongoDBCollectionName,
         required_for: str,
     ) -> str:
         """Resolve a MongoDB namespace for namespace-based helpers.
@@ -439,7 +439,7 @@ class LangChainMongoDBConnectors:
         self,
         *,
         database_name: str | None,
-        collection: LangChainMongoDBCollectionName,
+        collection: MongoDBCollectionName,
         required_for: str,
     ) -> tuple[str, str]:
         """Resolve configured database and collection names.
@@ -473,7 +473,7 @@ class LangChainMongoDBConnectors:
         kwargs: dict[str, Any],
         *,
         database_name: str | None,
-        collection: LangChainMongoDBCollectionName,
+        collection: MongoDBCollectionName,
     ) -> None:
         """Apply configured database and collection values to constructor kwargs.
 
@@ -487,7 +487,7 @@ class LangChainMongoDBConnectors:
             kwargs.setdefault("database_name", selected_database)
         kwargs.setdefault("collection_name", self._collection_name(collection))
 
-    def _collection_name(self, collection: LangChainMongoDBCollectionName) -> str:
+    def _collection_name(self, collection: MongoDBCollectionName) -> str:
         """Resolve a hard-coded collection alias to a MongoDB collection name.
 
         Args:
@@ -530,7 +530,7 @@ def default_client_factories(settings: Settings | None = None) -> ClientFactorie
                 lambda: _create_sqlalchemy_engine(settings),
                 shared=True,
             )
-    if settings is not None and settings.langchain_mongodb.configured:
+    if settings is not None and settings.mongodb.configured:
         factories = factories.with_factory(
             "langchain_mongodb",
             lambda: _create_langchain_mongodb_connectors(settings),
@@ -552,7 +552,7 @@ def _create_langchain_mongodb_connectors(settings: Settings) -> LangChainMongoDB
     Raises:
         ConfigurationPortalError: If the optional dependency or URI is unavailable.
     """
-    if not settings.langchain_mongodb.configured:
+    if not settings.mongodb.configured:
         raise ConfigurationPortalError(
             "LangChain MongoDB connectors require "
             "MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING.",
@@ -569,7 +569,7 @@ def _create_langchain_mongodb_connectors(settings: Settings) -> LangChainMongoDB
             cause=error,
         ) from error
 
-    return LangChainMongoDBConnectors(settings.langchain_mongodb)
+    return LangChainMongoDBConnectors(settings.mongodb)
 
 
 def _create_sqlalchemy_engine(settings: Settings) -> Any:

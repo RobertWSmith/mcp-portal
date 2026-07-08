@@ -9,6 +9,7 @@ description = "A small, extensible FastMCP server scaffold."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "mcp[cli]>=1.28.1,<2",
     "fastmcp[apps]>=3.0.0,<4",
     "mcp>=1.28.1,<2",
     "python-dotenv>=1.0.1,<2",

@@ -75,7 +75,7 @@ def create_namespace_test_context(
         or Redactor.from_secrets(
             (
                 selected_settings.openai.api_key,
-                selected_settings.langchain_mongodb.connection_string,
+                selected_settings.mongodb.connection_string,
             )
         ),
         clock=clock,

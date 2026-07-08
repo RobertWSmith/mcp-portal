@@ -16,7 +16,7 @@ from mcp_portal.config import (
     AuthSettings,
     DatabaseSettings,
     HttpSettings,
-    LangChainMongoDBSettings,
+    MongoDBSettings,
     MiddlewareSettings,
     ObservabilitySettings,
 )
@@ -265,7 +265,7 @@ def test_langchain_mongodb_factory_is_independent_of_database_provider(monkeypat
     settings = replace(
         create_test_settings(),
         database=DatabaseSettings(provider="none"),
-        langchain_mongodb=LangChainMongoDBSettings(
+        mongodb=MongoDBSettings(
             connection_string="mongodb://cluster.example",
             database_name="portal",
             vector_search_index="portal_vector",
@@ -326,7 +326,7 @@ def test_langchain_mongodb_factory_requires_optional_dependency(monkeypatch) -> 
     """Verify configured MongoDB connector access fails through its optional boundary."""
     settings = replace(
         create_test_settings(),
-        langchain_mongodb=LangChainMongoDBSettings(connection_string="mongodb://cluster.example"),
+        mongodb=MongoDBSettings(connection_string="mongodb://cluster.example"),
     )
     monkeypatch.setattr(
         clients_module,
@@ -341,7 +341,7 @@ def test_langchain_mongodb_factory_requires_optional_dependency(monkeypatch) -> 
 
 def test_langchain_mongodb_connector_helpers_use_configured_defaults(monkeypatch) -> None:
     """Verify connector helper methods pass configured MongoDB defaults."""
-    settings = LangChainMongoDBSettings(
+    settings = MongoDBSettings(
         connection_string="mongodb://cluster.example",
         database_name="portal",
         vector_search_index="portal_vector",
@@ -446,7 +446,7 @@ def test_langchain_mongodb_connector_helpers_use_configured_defaults(monkeypatch
 def test_langchain_mongodb_connector_reports_missing_required_settings() -> None:
     """Verify helper methods fail clearly when required MongoDB settings are absent."""
     connector = clients_module.LangChainMongoDBConnectors(
-        LangChainMongoDBSettings(connection_string="mongodb://cluster.example")
+        MongoDBSettings(connection_string="mongodb://cluster.example")
     )
 
     with pytest.raises(ConfigurationPortalError, match="requires a database"):
@@ -455,12 +455,12 @@ def test_langchain_mongodb_connector_reports_missing_required_settings() -> None
     with pytest.raises(ConfigurationPortalError, match="database name"):
         connector.agent_database()
 
-    missing_uri_connector = clients_module.LangChainMongoDBConnectors(LangChainMongoDBSettings())
+    missing_uri_connector = clients_module.LangChainMongoDBConnectors(MongoDBSettings())
     with pytest.raises(ConfigurationPortalError, match="CONNECTION_STRING"):
         _ = missing_uri_connector.connection_string
 
     configured_connector = clients_module.LangChainMongoDBConnectors(
-        LangChainMongoDBSettings(
+        MongoDBSettings(
             connection_string="mongodb://cluster.example",
             database_name="portal",
         )

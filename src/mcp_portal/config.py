@@ -11,19 +11,19 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 AuthProviderName = Literal["none", "static", "jwt"]
 DatabaseProviderName = Literal["none", "oracle", "sqlalchemy"]
-LangChainMongoDBCollectionName = Literal[
+MongoDBCollectionName = Literal[
     "documents",
     "chat_history",
     "cache",
     "semantic_cache",
 ]
-DEFAULT_LANGCHAIN_MONGODB_COLLECTIONS: dict[LangChainMongoDBCollectionName, str] = {
+DEFAULT_MONGODB_COLLECTIONS: dict[MongoDBCollectionName, str] = {
     "documents": "documents",
     "chat_history": "chat_history",
     "cache": "cache",
     "semantic_cache": "semantic_cache",
 }
-DEFAULT_LANGCHAIN_MONGODB_VECTOR_INDEX = "vector_index"
+DEFAULT_MONGODB_VECTOR_INDEX = "vector_index"
 DEFAULT_TAG_SCOPE_RULES: dict[str, tuple[str, ...]] = {
     "admin": ("admin",),
     "destructive": ("admin",),
@@ -362,8 +362,8 @@ class DatabaseSettings:
 
 
 @dataclass(frozen=True)
-class LangChainMongoDBSettings:
-    """LangChain MongoDB connector settings for namespace integrations.
+class MongoDBSettings:
+    """MongoDB connector settings for namespace integrations.
 
     Attributes:
         connection_string: Optional MongoDB connection URI.
@@ -374,21 +374,21 @@ class LangChainMongoDBSettings:
 
     connection_string: str | None = None
     database_name: str | None = None
-    collections: Mapping[LangChainMongoDBCollectionName, str] = field(
-        default_factory=lambda: dict(DEFAULT_LANGCHAIN_MONGODB_COLLECTIONS)
+    collections: Mapping[MongoDBCollectionName, str] = field(
+        default_factory=lambda: dict(DEFAULT_MONGODB_COLLECTIONS)
     )
-    vector_search_index: str = DEFAULT_LANGCHAIN_MONGODB_VECTOR_INDEX
+    vector_search_index: str = DEFAULT_MONGODB_VECTOR_INDEX
 
     @property
     def configured(self) -> bool:
-        """Report whether LangChain MongoDB connectors can be registered.
+        """Report whether MongoDB connectors can be registered.
 
         Returns:
             True when a MongoDB connection URI is configured.
         """
         return self.connection_string is not None
 
-    def collection_name(self, collection: LangChainMongoDBCollectionName) -> str:
+    def collection_name(self, collection: MongoDBCollectionName) -> str:
         """Return the hard-coded MongoDB collection name for an alias.
 
         Args:
@@ -399,7 +399,7 @@ class LangChainMongoDBSettings:
         """
         return self.collections[collection]
 
-    def namespace(self, collection: LangChainMongoDBCollectionName = "documents") -> str | None:
+    def namespace(self, collection: MongoDBCollectionName = "documents") -> str | None:
         """Return the configured MongoDB namespace for a hard-coded collection alias.
 
         Args:
@@ -422,7 +422,7 @@ class LangChainMongoDBSettings:
         return self.configured and self.namespace("documents") is not None
 
     def public_snapshot(self) -> dict[str, object]:
-        """Return LangChain MongoDB settings safe to expose.
+        """Return MongoDB settings safe to expose.
 
         Returns:
             Public connector metadata with the MongoDB URI omitted.
@@ -451,7 +451,7 @@ class Settings:
         namespace_discovery: Namespace discovery behavior.
         observability: Observability export metadata.
         database: Preferred database backend settings.
-        langchain_mongodb: LangChain MongoDB connector settings.
+        mongodb: MongoDB connector settings.
     """
 
     openai: OpenAISettings
@@ -465,7 +465,7 @@ class Settings:
     )
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
-    langchain_mongodb: LangChainMongoDBSettings = field(default_factory=LangChainMongoDBSettings)
+    mongodb: MongoDBSettings = field(default_factory=MongoDBSettings)
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None, override: bool = False) -> "Settings":
@@ -539,12 +539,12 @@ class Settings:
                 oracle_pool_min=_int_env("MCP_PORTAL_ORACLE_POOL_MIN", default=1),
                 oracle_pool_max=_int_env("MCP_PORTAL_ORACLE_POOL_MAX", default=4),
             ),
-            langchain_mongodb=LangChainMongoDBSettings(
-                connection_string=_optional_env("MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING"),
-                database_name=_optional_env("MCP_PORTAL_LANGCHAIN_MONGODB_DATABASE"),
+            mongodb=MongoDBSettings(
+                connection_string=_optional_env("MCP_PORTAL_MONGODB_CONNECTION_STRING"),
+                database_name=_optional_env("MCP_PORTAL_MONGODB_DATABASE"),
                 vector_search_index=(
-                    _optional_env("MCP_PORTAL_LANGCHAIN_MONGODB_VECTOR_SEARCH_INDEX")
-                    or DEFAULT_LANGCHAIN_MONGODB_VECTOR_INDEX
+                    _optional_env("MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX")
+                    or DEFAULT_MONGODB_VECTOR_INDEX
                 ),
             ),
         )
@@ -623,7 +623,7 @@ class Settings:
             "namespace_discovery": self.namespace_discovery.public_snapshot(),
             "observability": self.observability.public_snapshot(),
             "database": self.database.public_snapshot(),
-            "langchain_mongodb": self.langchain_mongodb.public_snapshot(),
+            "mongodb": self.mongodb.public_snapshot(),
         }
 
 
@@ -663,29 +663,6 @@ def _optional_env(name: str) -> str | None:
     return value or None
 
 
-def _bool_env(name: str, *, default: bool) -> bool:
-    """Read an optional boolean environment variable.
-
-    Args:
-        name: Environment variable name to read.
-        default: Value returned when the environment variable is unset or blank.
-
-    Returns:
-        Parsed boolean value.
-    """
-    value = _optional_env(name)
-    if value is None:
-        return default
-
-    normalized = value.lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-
-    return default
-
-
 def _optional_bool_env(name: str) -> bool | None:
     """Read an optional boolean environment variable.
 
@@ -699,13 +676,29 @@ def _optional_bool_env(name: str) -> bool | None:
     if value is None:
         return None
 
-    normalized = value.lower()
+    normalized = value.lower().strip()
     if normalized in {"1", "true", "yes", "on"}:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
 
     return None
+
+
+def _bool_env(name: str, *, default: bool) -> bool:
+    """Read an optional boolean environment variable.
+
+    Args:
+        name: Environment variable name to read.
+        default: Value returned when the environment variable is unset or blank.
+
+    Returns:
+        Parsed boolean value.
+    """
+    value = _optional_bool_env(name)
+    if value is None:
+        return default
+    return value
 
 
 def _int_env(name: str, *, default: int) -> int:

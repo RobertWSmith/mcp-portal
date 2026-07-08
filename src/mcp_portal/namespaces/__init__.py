@@ -252,7 +252,7 @@ def build_namespace_runtimes(
             settings.auth.jwt_public_key,
             settings.database.sqlalchemy_url,
             settings.database.oracle_password,
-            settings.langchain_mongodb.connection_string,
+            settings.mongodb.connection_string,
         )
     )
 

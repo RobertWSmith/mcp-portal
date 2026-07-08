@@ -224,7 +224,7 @@ async def test_runtime_config_does_not_expose_secret(client: Client) -> None:
         "oracle_pool_min": 1,
         "oracle_pool_max": 4,
     }
-    assert result.data["langchain_mongodb"] == {
+    assert result.data["mongodb"] == {
         "configured": False,
         "connection_string_configured": False,
         "database_configured": False,
