@@ -25,7 +25,7 @@ database = [
 ]
 oracle = [
     "sqlalchemy>=2.0.51,<3",
-    "oracledb>=2.5,<4",
+    "oracledb>=2.5,<5",
 ]
 mongodb = [
     "langchain-mongodb>=0.11,<1",
@@ -42,7 +42,7 @@ enterprise-auth = [
 ]
 dev = [
     "black>=26.5.1",
-    "pytest>=8.2,<9",
+    "pytest>=8.2,<10",
     "pytest-asyncio>=0.24,<2",
     "pytest-cov>=5,<8",
     "ruff>=0.8,<1",
