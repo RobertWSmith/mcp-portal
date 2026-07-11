@@ -296,15 +296,17 @@ class AuthSettings:
 
 @dataclass(frozen=True)
 class AuthorizationSettings:
-    """Authorization policy mapped from component tags to required scopes.
+    """Authorization policy mapped from tags and namespaces to required scopes.
 
     Attributes:
         tag_scopes: Mapping of FastMCP component tags to required OAuth scopes.
+        namespace_scopes: Deployment-level scopes required to discover or use a namespace.
     """
 
     tag_scopes: dict[str, tuple[str, ...]] = field(
         default_factory=lambda: dict(DEFAULT_TAG_SCOPE_RULES)
     )
+    namespace_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def enabled(self) -> bool:
@@ -313,7 +315,7 @@ class AuthorizationSettings:
         Returns:
             True when at least one tag-to-scope rule is configured.
         """
-        return bool(self.tag_scopes)
+        return bool(self.tag_scopes or self.namespace_scopes)
 
     def public_snapshot(self) -> dict[str, object]:
         """Return authorization policy safe to expose through development tools.
@@ -324,6 +326,10 @@ class AuthorizationSettings:
         return {
             "enabled": self.enabled,
             "tag_scopes": {tag: list(scopes) for tag, scopes in sorted(self.tag_scopes.items())},
+            "namespace_scopes": {
+                namespace: list(scopes)
+                for namespace, scopes in sorted(self.namespace_scopes.items())
+            },
         }
 
 
@@ -751,6 +757,10 @@ class Settings:
                 tag_scopes=_tag_scope_env(
                     "MCP_PORTAL_AUTHZ_TAG_SCOPES",
                     default=DEFAULT_TAG_SCOPE_RULES,
+                ),
+                namespace_scopes=_tag_scope_env(
+                    "MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES",
+                    default={},
                 ),
             ),
             middleware=MiddlewareSettings(

@@ -147,6 +147,7 @@ MCP_PORTAL_AUTH_KERBEROS_KEYTAB=/run/secrets/mcp-portal.keytab
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
 | `MCP_PORTAL_AUTHZ_TAG_SCOPES` | `admin=admin;destructive=admin;external=external;write=write` | No | Maps FastMCP component tags to required OAuth scopes for production authorization checks. |
+| `MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES` | unset | No | Maps namespace names to scopes required for discovery and access. Unauthorized namespace tools, resources, templates, and prompts are omitted from catalog responses. |
 
 Rules are separated by semicolons. Each rule uses `=` or `:` between the tag and its
 scopes. Scopes can be comma-separated or space-separated.
@@ -155,9 +156,12 @@ Example:
 
 ```dotenv
 MCP_PORTAL_AUTHZ_TAG_SCOPES=admin=portal.admin;write=portal.write portal.audit
+MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES=finance=finance.read;hr=hr.read hr.audit
 ```
 
-If the value is malformed, MCP Portal falls back to the default rules.
+If the tag value is malformed, MCP Portal falls back to the default tag rules. A malformed
+namespace value falls back to no deployment-specific namespace rules; manifest-level
+`required_scopes` continue to apply.
 
 ## Production Middleware Settings
 

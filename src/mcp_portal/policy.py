@@ -47,6 +47,22 @@ class PolicyEngine(Protocol):
         """
         ...
 
+    async def authorize_catalog(
+        self,
+        invocation: InvocationContext,
+        tool: Tool,
+    ) -> PolicyDecision:
+        """Evaluate whether a tool may be disclosed in discovery.
+
+        Args:
+            invocation: Trusted invocation context.
+            tool: Registered SDK tool considered for disclosure.
+
+        Returns:
+            Auditable catalog visibility decision.
+        """
+        ...
+
 
 class ScopePolicyEngine:
     """Default-deny tag/scope policy for the built-in deployment profile."""
@@ -88,9 +104,7 @@ class ScopePolicyEngine:
                 "tenant identifiers must come from verified invocation context",
                 obligations=("remove_untrusted_tenant_arguments",),
             )
-        required = frozenset(
-            scope for tag in tags for scope in self.settings.authorization.tag_scopes.get(tag, ())
-        ) | frozenset((tool.meta or {}).get("required_scopes", ()))
+        required = self.required_scopes(tool, tags=tags)
         if "tenant_override" in tags:
             required = required | {"tenant.admin"}
         obligations: list[str] = []
@@ -110,3 +124,52 @@ class ScopePolicyEngine:
         if missing:
             return PolicyDecision(False, "required scopes are missing", missing)
         return PolicyDecision(True, "scope policy satisfied", required, tuple(obligations))
+
+    async def authorize_catalog(
+        self,
+        invocation: InvocationContext,
+        tool: Tool,
+    ) -> PolicyDecision:
+        """Use execution policy to hide tools the caller cannot invoke.
+
+        Args:
+            invocation: Trusted caller identity for the discovery request.
+            tool: Registered tool considered for disclosure.
+
+        Returns:
+            Allow when the caller satisfies namespace and tool scope policy.
+        """
+        return await self.authorize(invocation, tool, {})
+
+    def required_scopes(
+        self,
+        tool: Tool,
+        *,
+        tags: frozenset[str] | None = None,
+    ) -> frozenset[str]:
+        """Resolve combined tag, manifest, and deployment namespace scopes.
+
+        Args:
+            tool: Registered governed tool.
+            tags: Optional normalized tool tags.
+
+        Returns:
+            Complete scope set required for discovery and execution.
+        """
+        meta = tool.meta or {}
+        selected_tags = tags if tags is not None else frozenset(meta.get("tags", ()))
+        namespace = meta.get("namespace")
+        namespace_scopes = (
+            self.settings.authorization.namespace_scopes.get(str(namespace), ())
+            if namespace is not None
+            else ()
+        )
+        return (
+            frozenset(
+                scope
+                for tag in selected_tags
+                for scope in self.settings.authorization.tag_scopes.get(tag, ())
+            )
+            | frozenset(meta.get("required_scopes", ()))
+            | frozenset(namespace_scopes)
+        )

@@ -44,7 +44,7 @@ from mcp_portal.namespaces import Namespace, build_namespace_runtimes, iter_name
 from mcp_portal.observability import configure_observability_environment
 from mcp_portal.policy import PolicyDecision, PolicyEngine, ScopePolicyEngine
 from mcp_portal.resilience import AdmissionController, QuotaBackend
-from mcp_portal.security import invocation_scope, new_invocation
+from mcp_portal.security import identity_from_access_token, invocation_scope, new_invocation
 from mcp_portal.tasks import MemoryTaskStore
 
 Transport = Literal["stdio", "http", "sse", "streamable-http"]
@@ -83,10 +83,153 @@ class PortalFastMCP(FastMCP):
         self.audit_sink = audit_sink or LoggingAuditSink()
         self.enforce_request_controls = enforce_request_controls
         self.approval_verifier = approval_verifier or RejectingApprovalVerifier()
+        self._component_namespaces: dict[tuple[str, str], Namespace] = {}
         self.admission = AdmissionController(
             selected_settings.enterprise.max_concurrent_requests, quota_backend
         )
         super().__init__(*args, **kwargs)
+
+    async def list_tools(self) -> list[Any]:
+        """Return only tools authorized for the current verified caller.
+
+        Returns:
+            MCP tool definitions whose namespace and tool policy is satisfied.
+        """
+        visible: list[Any] = []
+        for exposed_tool in await super().list_tools():
+            tool = self._tool_manager.get_tool(exposed_tool.name)
+            if tool is None:
+                continue
+            invocation = new_invocation(
+                exposed_tool.name,
+                self.portal_settings.enterprise.tenant_claim,
+                self.portal_settings.enterprise.tool_timeout_seconds,
+            )
+            catalog_authorizer = getattr(self.policy_engine, "authorize_catalog", None)
+            if catalog_authorizer is None:
+                decision = await self.policy_engine.authorize(invocation, tool, {})
+            else:
+                decision = await catalog_authorizer(invocation, tool)
+            if decision.allowed:
+                visible.append(exposed_tool)
+        return visible
+
+    async def list_resources(self) -> list[Any]:
+        """Hide resources belonging to namespaces unavailable to the caller.
+
+        Returns:
+            MCP resource definitions from visible namespaces.
+        """
+        return [
+            resource
+            for resource in await super().list_resources()
+            if self._namespace_visible(
+                self._component_namespaces.get(("resource", str(resource.uri)))
+            )
+        ]
+
+    async def list_resource_templates(self) -> list[Any]:
+        """Hide resource templates belonging to unavailable namespaces.
+
+        Returns:
+            MCP resource-template definitions from visible namespaces.
+        """
+        return [
+            template
+            for template in await super().list_resource_templates()
+            if self._namespace_visible(
+                self._component_namespaces.get(("template", template.uriTemplate))
+            )
+        ]
+
+    async def list_prompts(self) -> list[Any]:
+        """Hide prompts belonging to namespaces unavailable to the caller.
+
+        Returns:
+            MCP prompt definitions from visible namespaces.
+        """
+        return [
+            prompt
+            for prompt in await super().list_prompts()
+            if self._namespace_visible(self._component_namespaces.get(("prompt", prompt.name)))
+        ]
+
+    async def read_resource(self, uri: Any) -> Any:
+        """Fail closed when a caller requests a hidden namespace resource.
+
+        Args:
+            uri: Concrete resource URI requested by the client.
+
+        Returns:
+            Resource contents from an authorized namespace.
+
+        Raises:
+            ValueError: If the resource belongs to a hidden namespace.
+        """
+        namespace = self._resource_namespace(str(uri))
+        if namespace is not None and not self._namespace_visible(namespace):
+            raise ValueError(f"Unknown resource: {uri}")
+        return await super().read_resource(uri)
+
+    async def get_prompt(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> Any:
+        """Fail closed when a caller requests a hidden namespace prompt.
+
+        Args:
+            name: Mounted prompt name requested by the client.
+            arguments: Optional prompt template arguments.
+
+        Returns:
+            Rendered prompt from an authorized namespace.
+
+        Raises:
+            ValueError: If the prompt belongs to a hidden namespace.
+        """
+        namespace = self._component_namespaces.get(("prompt", name))
+        if namespace is not None and not self._namespace_visible(namespace):
+            raise ValueError(f"Unknown prompt: {name}")
+        return await super().get_prompt(name, arguments)
+
+    def _namespace_visible(self, namespace: Namespace | None) -> bool:
+        """Evaluate manifest and deployment scopes for a namespace catalog entry.
+
+        Args:
+            namespace: Governed namespace associated with a catalog component.
+
+        Returns:
+            True when the verified caller may discover the namespace.
+        """
+        if namespace is None or not self.portal_settings.auth.enabled:
+            return True
+        identity = identity_from_access_token(self.portal_settings.enterprise.tenant_claim)
+        if identity.subject is None and identity.client_id is None:
+            return False
+        if self.portal_settings.enterprise.require_tenant and identity.tenant_id is None:
+            return False
+        required = namespace.required_scopes | frozenset(
+            self.portal_settings.authorization.namespace_scopes.get(namespace.name, ())
+        )
+        return required <= identity.scopes
+
+    def _resource_namespace(self, uri: str) -> Namespace | None:
+        """Resolve the governed namespace for a concrete or templated resource URI.
+
+        Args:
+            uri: Concrete resource URI requested by the client.
+
+        Returns:
+            Matching governed namespace, if the resource is namespace-owned.
+        """
+        namespace = self._component_namespaces.get(("resource", uri))
+        if namespace is not None:
+            return namespace
+        for template in self._resource_manager.list_templates():
+            if template.matches(uri):
+                return self._component_namespaces.get(("template", template.uri_template))
+        return None
 
     def mount(self, server: FastMCP, *, namespace: Namespace | str) -> None:
         """Copy a namespace server's tools onto this server with a prefix.
@@ -311,15 +454,36 @@ def _copy_provider_components(
         namespace: Optional governed namespace manifest.
     """
     target_tools = target._tool_manager._tools
+    configured_scopes = (
+        frozenset(target.portal_settings.authorization.namespace_scopes.get(namespace.name, ()))
+        if isinstance(target, PortalFastMCP) and isinstance(namespace, Namespace)
+        else frozenset()
+    )
     for tool in source._tool_manager.list_tools():
         name = f"{prefix}{tool.name}"
-        target_tools[name] = _governed_tool(tool, name, namespace)
+        governed = _governed_tool(tool, name, namespace)
+        if isinstance(namespace, Namespace):
+            meta = dict(governed.meta or {})
+            meta["required_scopes"] = sorted(
+                frozenset(meta.get("required_scopes", ())) | configured_scopes
+            )
+            governed = governed.model_copy(update={"meta": meta})
+            if isinstance(target, PortalFastMCP):
+                target._component_namespaces[("tool", name)] = namespace
+        target_tools[name] = governed
 
     target._resource_manager._resources.update(source._resource_manager._resources)
     target._resource_manager._templates.update(source._resource_manager._templates)
+    if isinstance(target, PortalFastMCP) and isinstance(namespace, Namespace):
+        for resource in source._resource_manager.list_resources():
+            target._component_namespaces[("resource", str(resource.uri))] = namespace
+        for template in source._resource_manager.list_templates():
+            target._component_namespaces[("template", template.uri_template)] = namespace
     for prompt in source._prompt_manager.list_prompts():
         name = f"{prefix}{prompt.name}"
         target._prompt_manager._prompts[name] = prompt.model_copy(update={"name": name})
+        if isinstance(target, PortalFastMCP) and isinstance(namespace, Namespace):
+            target._component_namespaces[("prompt", name)] = namespace
 
 
 def _apply_transport_settings(

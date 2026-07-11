@@ -48,6 +48,7 @@ PORTAL_ENV_NAMES = (
     "MCP_PORTAL_AUTH_KERBEROS_KEYTAB",
     "MCP_PORTAL_AUTH_KERBEROS_SCOPES",
     "MCP_PORTAL_AUTHZ_TAG_SCOPES",
+    "MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES",
     "MCP_PORTAL_MIDDLEWARE_ENABLED",
     "MCP_PORTAL_STRUCTURED_LOGGING",
     "MCP_PORTAL_LOG_PAYLOAD_LENGTHS",
@@ -201,6 +202,7 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
                 "MCP_PORTAL_AUTH_JWT_ISSUER=https://issuer.example",
                 "MCP_PORTAL_AUTH_JWT_AUDIENCE=mcp-portal",
                 "MCP_PORTAL_AUTHZ_TAG_SCOPES=admin=admin;write=portal.write",
+                "MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES=finance=finance.read;hr=hr.read hr.audit",
                 "MCP_PORTAL_MIDDLEWARE_ENABLED=true",
                 "MCP_PORTAL_RATE_LIMIT_PER_SECOND=7.5",
                 "MCP_PORTAL_RATE_LIMIT_BURST=11",
@@ -236,6 +238,10 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
     assert settings.authorization.tag_scopes == {
         "admin": ("admin",),
         "write": ("portal.write",),
+    }
+    assert settings.authorization.namespace_scopes == {
+        "finance": ("finance.read",),
+        "hr": ("hr.read", "hr.audit"),
     }
     assert settings.middleware.enabled is True
     assert settings.middleware.rate_limit_per_second == 7.5
@@ -347,6 +353,7 @@ def test_settings_defaults_and_placeholder_key(monkeypatch) -> None:
     assert snapshot["health"] == {"enabled": True}
     assert snapshot["auth"]["enabled"] is False
     assert snapshot["authorization"]["tag_scopes"]["admin"] == ["admin"]
+    assert snapshot["authorization"]["namespace_scopes"] == {}
     assert snapshot["middleware"]["enabled"] is False
     assert snapshot["http"]["path"] == "/mcp"
     assert snapshot["namespace_discovery"] == {"strict": False}

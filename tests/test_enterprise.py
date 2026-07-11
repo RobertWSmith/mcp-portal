@@ -5,12 +5,20 @@ from dataclasses import replace
 import anyio
 import pytest
 from mcp.server.auth.provider import AccessToken
+from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.fastmcp import FastMCP
 from starlette.testclient import TestClient
 
 from mcp_portal.audit import MemoryAuditSink, audit_event, digest_arguments
 from mcp_portal.approvals import RejectingApprovalVerifier
-from mcp_portal.config import AuthSettings, EnterpriseSettings, HttpSettings, MiddlewareSettings
+from mcp_portal.config import (
+    AuthSettings,
+    AuthorizationSettings,
+    EnterpriseSettings,
+    HttpSettings,
+    MiddlewareSettings,
+)
 from mcp_portal.contracts import compare_tool_contract_manifests
 from mcp_portal.credentials import RejectingCredentialBroker
 from mcp_portal.egress import EgressPolicy
@@ -123,6 +131,111 @@ async def test_active_server_path_denies_before_tool_execution() -> None:
 
     assert len(audit.events) == 1
     assert audit.events[0].allowed is False
+
+
+@pytest.mark.asyncio
+async def test_catalog_only_discloses_authorized_namespaces_and_components() -> None:
+    """Verify namespace policy filters discovery and direct component access."""
+
+    def namespace_server(label: str):
+        def create(context) -> FastMCP:
+            _ = context
+            child = FastMCP(label)
+
+            @child.tool(meta={"tags": ["readonly"]})
+            def inspect_record() -> str:
+                """Inspect a governed record."""
+                return label
+
+            @child.resource(f"portal://{label}/record")
+            def record() -> str:
+                """Return a governed resource."""
+                return label
+
+            @child.resource(f"portal://{label}/records/{{record_id}}")
+            def record_by_id(record_id: str) -> str:
+                """Return a governed resource-template result."""
+                return f"{label}:{record_id}"
+
+            @child.prompt(name="review")
+            def review() -> str:
+                """Return a governed review prompt."""
+                return f"Review {label}"
+
+            return child
+
+        return create
+
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(provider="static", static_token="configured-token"),
+        authorization=AuthorizationSettings(
+            tag_scopes={},
+            namespace_scopes={"finance": ("finance.read",)},
+        ),
+    )
+    server = create_mcp(
+        settings,
+        namespaces=[
+            Namespace("finance", namespace_server("finance")),
+            Namespace(
+                "hr",
+                namespace_server("hr"),
+                required_scopes=frozenset({"hr.read"}),
+            ),
+        ],
+        include_debug_ui=False,
+    )
+    access_token = AccessToken(
+        token="verified-token",
+        client_id="catalog-client",
+        scopes=["finance.read"],
+        subject="alice",
+    )
+    context_token = auth_context_var.set(AuthenticatedUser(access_token))
+    try:
+        tools = await server.list_tools()
+        resources = await server.list_resources()
+        templates = await server.list_resource_templates()
+        prompts = await server.list_prompts()
+
+        assert [tool.name for tool in tools] == ["finance_inspect_record"]
+        assert tools[0].meta["required_scopes"] == ["finance.read"]
+        assert [str(resource.uri) for resource in resources] == ["portal://finance/record"]
+        assert [template.uriTemplate for template in templates] == [
+            "portal://finance/records/{record_id}"
+        ]
+        assert [prompt.name for prompt in prompts] == ["finance_review"]
+        assert await server.call_tool("finance_inspect_record", {})
+
+        with pytest.raises(PermissionPortalError):
+            await server.call_tool("hr_inspect_record", {})
+        with pytest.raises(ValueError, match="Unknown resource"):
+            await server.read_resource("portal://hr/record")
+        with pytest.raises(ValueError, match="Unknown resource"):
+            await server.read_resource("portal://hr/records/employee-1")
+        with pytest.raises(ValueError, match="Unknown prompt"):
+            await server.get_prompt("hr_review")
+    finally:
+        auth_context_var.reset(context_token)
+
+
+@pytest.mark.asyncio
+async def test_catalog_fails_closed_without_identity_or_with_custom_denial() -> None:
+    """Verify authenticated discovery requires identity and honors custom policy."""
+    authenticated_settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(provider="static", static_token="configured-token"),
+    )
+    authenticated = create_mcp(authenticated_settings, include_debug_ui=False)
+    assert await authenticated.list_tools() == []
+
+    denied = create_mcp(
+        create_test_settings(),
+        include_debug_ui=False,
+        policy_engine=DenyPolicy(),
+    )
+    assert await denied.list_tools() == []
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,7 @@ accepted values, loading behavior, and production requirements.
 - `MCP_PORTAL_HEALTH_ENABLED`
 - `MCP_PORTAL_AUTH_*` for HTTP authentication
 - `MCP_PORTAL_AUTHZ_TAG_SCOPES` for tag policy metadata
+- `MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES` for per-namespace catalog visibility and access
 - `MCP_PORTAL_HTTP_PATH` and `MCP_PORTAL_HEALTH_PATH`
 - `MCP_PORTAL_DATABASE_PROVIDER`, `MCP_PORTAL_DATABASE_SQLALCHEMY_URL`, and `MCP_PORTAL_ORACLE_*`
 - `MCP_PORTAL_LANGCHAIN_MONGODB_*` for LangChain MongoDB connectors
@@ -124,6 +125,13 @@ those providers; the full settings and examples are in
 Tag metadata can be attached to SDK tools through `_meta`. Keep using `readonly`,
 `write`, `admin`, `external`, and `destructive` tags on namespace tools so access
 policy can stay centralized.
+
+Namespace catalogs are filtered per verified caller. Declare code-owned baseline access with
+`required_scopes` on `@register_namespace(...)`, and apply deployment-specific access with
+`MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES`. A caller that lacks either set does not see that
+namespace's tools, resources, templates, or prompts. Calling a hidden tool directly is still
+denied by policy, while hidden resources and prompts respond as unknown to avoid disclosing
+their existence.
 
 Relational database access goes through SQLAlchemy engines. Oracle is the preferred
 SQLAlchemy backend for portal integrations, but namespaces should depend on SQLAlchemy
