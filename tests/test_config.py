@@ -77,6 +77,11 @@ PORTAL_ENV_NAMES = (
     "MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX",
     "OTEL_SERVICE_NAME",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "MCP_PORTAL_METRICS_ENABLED",
+    "MCP_PORTAL_COST_ACCOUNTING_ENABLED",
+    "MCP_PORTAL_METRICS_INCLUDE_TENANT",
+    "MCP_PORTAL_COST_CURRENCY",
+    "MCP_PORTAL_PRICING_VERSION",
 )
 
 
@@ -228,6 +233,11 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
                 "MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX=portal_vector",
                 "OTEL_SERVICE_NAME=portal-prod",
                 "OTEL_EXPORTER_OTLP_ENDPOINT=http://otel.example:4317",
+                "MCP_PORTAL_METRICS_ENABLED=true",
+                "MCP_PORTAL_COST_ACCOUNTING_ENABLED=true",
+                "MCP_PORTAL_METRICS_INCLUDE_TENANT=true",
+                "MCP_PORTAL_COST_CURRENCY=eur",
+                "MCP_PORTAL_PRICING_VERSION=contract-2026-07",
             ]
         ),
         encoding="utf-8",
@@ -273,6 +283,11 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
     assert settings.mongodb.vector_search_configured is True
     assert settings.observability.enabled is True
     assert settings.observability.service_name == "portal-prod"
+    assert settings.observability.metrics_enabled is True
+    assert settings.observability.cost_accounting_enabled is True
+    assert settings.observability.include_tenant_metrics is True
+    assert settings.observability.cost_currency == "EUR"
+    assert settings.observability.pricing_version == "contract-2026-07"
 
 
 def test_settings_load_combined_ldap_and_kerberos_auth(tmp_path: Path) -> None:

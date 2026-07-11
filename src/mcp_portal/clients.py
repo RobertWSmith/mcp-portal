@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -11,8 +12,9 @@ from mcp_portal.config import (
     MongoDBSettings,
     Settings,
 )
-from mcp_portal.errors import ConfigurationPortalError
+from mcp_portal.errors import ConfigurationPortalError, TimeoutPortalError, UpstreamPortalError
 from mcp_portal.resilience import CircuitBreakerRegistry, CircuitState
+from mcp_portal.telemetry import OpenTelemetryRecorder, TelemetryRecorder
 
 ClientFactory = Callable[[], Any]
 ReadinessCheck = Callable[[], Any | Awaitable[Any]]
@@ -32,6 +34,7 @@ class ClientFactories:
     readiness_checks: Mapping[str, ReadinessCheck] = field(default_factory=dict)
     circuit_breakers: CircuitBreakerRegistry = field(default_factory=CircuitBreakerRegistry)
     downstream_timeout_seconds: float = 45.0
+    telemetry: TelemetryRecorder = field(default_factory=OpenTelemetryRecorder)
     _shared_clients: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -145,11 +148,30 @@ class ClientFactories:
             The downstream operation result.
         """
         self.require(name)
-        return await self.circuit_breakers.execute(
-            name,
-            operation,
-            timeout_seconds=timeout_seconds or self.downstream_timeout_seconds,
-        )
+        started = time.perf_counter()
+        outcome = "succeeded"
+        try:
+            return await self.circuit_breakers.execute(
+                name,
+                operation,
+                timeout_seconds=timeout_seconds or self.downstream_timeout_seconds,
+            )
+        except TimeoutPortalError:
+            outcome = "timed_out"
+            raise
+        except UpstreamPortalError:
+            outcome = "rejected"
+            raise
+        except Exception:
+            outcome = "failed"
+            raise
+        finally:
+            self.telemetry.record_downstream_call(
+                name,
+                outcome=outcome,
+                duration_seconds=time.perf_counter() - started,
+                circuit_state=self.circuit_breakers.get(name).state.value,
+            )
 
     async def check_readiness(self) -> dict[str, dict[str, Any]]:
         """Run registered dependency probes concurrently through their circuits.
@@ -237,13 +259,20 @@ class ClientFactories:
             readiness_checks,
             self.circuit_breakers,
             self.downstream_timeout_seconds,
+            self.telemetry,
         )
 
-    def with_resilience(self, settings: Settings) -> "ClientFactories":
+    def with_resilience(
+        self,
+        settings: Settings,
+        *,
+        telemetry: TelemetryRecorder | None = None,
+    ) -> "ClientFactories":
         """Return a registry configured with deployment circuit-breaker policy.
 
         Args:
             settings: Deployment settings containing resilience defaults.
+            telemetry: Optional shared metrics and accounting recorder.
 
         Returns:
             A copied registry with a fresh configured breaker registry.
@@ -257,6 +286,7 @@ class ClientFactories:
                 settings.enterprise.circuit_breaker_recovery_seconds,
             ),
             settings.enterprise.downstream_timeout_seconds,
+            telemetry or self.telemetry,
         )
 
 
@@ -627,18 +657,23 @@ class MongoDBConnectors:
             ) from error
 
 
-def default_client_factories(settings: Settings | None = None) -> ClientFactories:
+def default_client_factories(
+    settings: Settings | None = None,
+    *,
+    telemetry: TelemetryRecorder | None = None,
+) -> ClientFactories:
     """Create the default external client registry.
 
     Args:
         settings: Optional runtime settings used to register configured backends.
+        telemetry: Optional shared metrics and accounting recorder.
 
     Returns:
         A client registry ready for namespace-specific injection.
     """
-    factories = ClientFactories()
+    factories = ClientFactories(telemetry=telemetry or OpenTelemetryRecorder())
     if settings is not None:
-        factories = factories.with_resilience(settings)
+        factories = factories.with_resilience(settings, telemetry=telemetry)
     if settings is not None and settings.database.provider != "none":
         if settings.database.sqlalchemy_configured:
 

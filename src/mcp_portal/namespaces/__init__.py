@@ -6,6 +6,7 @@ import pkgutil
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Literal
 
 from mcp.types import Annotations, Icon, ToolAnnotations
@@ -14,9 +15,11 @@ from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
 from mcp_portal.credentials import CredentialBroker, RejectingCredentialBroker
 from mcp_portal.egress import EgressPolicy
+from mcp_portal.observability import create_telemetry_recorder
 from mcp_portal.redaction import Redactor
 from mcp_portal.security import InvocationContext, current_invocation
 from mcp_portal.tasks import MemoryTaskStore
+from mcp_portal.telemetry import TelemetryRecorder, UsageRecord
 from mcp_portal.tenancy import (
     TenantMongoDBConnectors,
     TenantScope,
@@ -52,6 +55,7 @@ class NamespaceContext:
     egress: EgressPolicy
     credentials: CredentialBroker
     tasks: MemoryTaskStore
+    telemetry: TelemetryRecorder
 
     def now(self) -> datetime:
         """Return the current time from the namespace clock.
@@ -163,6 +167,51 @@ class NamespaceContext:
             operation,
             timeout_seconds=timeout_seconds,
         )
+
+    async def record_usage(
+        self,
+        *,
+        provider: str,
+        service: str,
+        operation: str,
+        quantity: int | float | Decimal | str,
+        unit: str,
+        sku: str | None = None,
+        estimated_cost: int | float | Decimal | str | None = None,
+        currency: str | None = None,
+        pricing_version: str | None = None,
+    ) -> UsageRecord:
+        """Capture tenant-scoped usage and estimated cost for this invocation.
+
+        Args:
+            provider: External provider or internal cost center.
+            service: Metered service or product family.
+            operation: Low-cardinality operation name.
+            quantity: Consumed quantity.
+            unit: Unit such as input_token, request, document, or compute_second.
+            sku: Optional model, deployment, or provider SKU.
+            estimated_cost: Optional estimated monetary cost.
+            currency: Optional currency override.
+            pricing_version: Optional pricing table or contract version override.
+
+        Returns:
+            The immutable usage record sent to telemetry sinks.
+        """
+        record = UsageRecord.create(
+            self.invocation(),
+            self.name,
+            provider=provider,
+            service=service,
+            operation=operation,
+            quantity=quantity,
+            unit=unit,
+            sku=sku,
+            estimated_cost=estimated_cost,
+            currency=currency or self.settings.observability.cost_currency,
+            pricing_version=pricing_version or self.settings.observability.pricing_version,
+        )
+        await self.telemetry.record_usage(record)
+        return record
 
 
 @dataclass(frozen=True)
@@ -644,6 +693,7 @@ def build_namespace_runtimes(
     egress: EgressPolicy | None = None,
     credentials: CredentialBroker | None = None,
     tasks: MemoryTaskStore | None = None,
+    telemetry: TelemetryRecorder | None = None,
 ) -> tuple[NamespaceRuntime, ...]:
     """Build runtime contexts for a group of namespaces.
 
@@ -653,6 +703,10 @@ def build_namespace_runtimes(
         clients: Optional shared client factory registry.
         redactor: Optional shared redactor.
         clock: Optional shared clock.
+        egress: Optional shared outbound destination policy.
+        credentials: Optional shared downstream credential broker.
+        tasks: Optional shared authorization-bound task store.
+        telemetry: Optional shared metrics and cost-accounting recorder.
 
     Returns:
         Runtime objects ready for mounting and diagnostics.
@@ -678,6 +732,7 @@ def build_namespace_runtimes(
         max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
         max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
     )
+    shared_telemetry = telemetry or create_telemetry_recorder(settings)
 
     return tuple(
         NamespaceRuntime(
@@ -691,6 +746,7 @@ def build_namespace_runtimes(
                 egress=shared_egress,
                 credentials=shared_credentials,
                 tasks=shared_tasks,
+                telemetry=shared_telemetry,
             ),
         )
         for namespace in namespaces
@@ -707,6 +763,7 @@ def build_namespace_context(
     egress: EgressPolicy | None = None,
     credentials: CredentialBroker | None = None,
     tasks: MemoryTaskStore | None = None,
+    telemetry: TelemetryRecorder | None = None,
 ) -> NamespaceContext:
     """Build the runtime context for one namespace.
 
@@ -719,6 +776,7 @@ def build_namespace_context(
         egress: Optional outbound destination policy.
         credentials: Optional downstream credential broker.
         tasks: Optional authorization-bound task store.
+        telemetry: Optional metrics and cost-accounting recorder.
 
     Returns:
         A namespace-scoped runtime context.
@@ -737,6 +795,7 @@ def build_namespace_context(
             max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
             max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
         ),
+        telemetry=telemetry or create_telemetry_recorder(settings),
     )
 
 

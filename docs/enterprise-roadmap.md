@@ -47,6 +47,12 @@ do not leak into namespace business logic.
 9. **Operational evidence** — use separate liveness and readiness routes, OpenTelemetry,
    audit events, latency/outcome metrics, and per-tenant cost records. Readiness should gain
    bounded live dependency checks as production namespaces declare required dependencies.
+
+   Implemented instrumentation emits tool count/duration/admission wait, downstream
+   count/duration/circuit state, generic provider usage, and estimated-cost metrics. Detailed
+   append-only accounting records retain trusted tenant/request ownership, exact decimal values,
+   currency, and pricing version without using high-cardinality identities in metrics by default.
+   Production deployments still need an OpenTelemetry SDK/exporter and a durable cost sink.
 10. **Supply-chain governance** — enforce namespace allowlists, dependency review, CodeQL,
     SBOM generation, Dependabot, signed release artifacts, and build provenance. Independently
     owned or untrusted namespaces should eventually run behind a process or network isolation

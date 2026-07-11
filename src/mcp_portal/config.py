@@ -526,10 +526,20 @@ class ObservabilitySettings:
     Attributes:
         service_name: Service name used by OpenTelemetry launchers.
         otlp_endpoint: Optional OTLP collector endpoint.
+        metrics_enabled: Whether runtime metrics are emitted.
+        cost_accounting_enabled: Whether detailed usage records are emitted.
+        include_tenant_metrics: Whether tenant ID may be used as a metric dimension.
+        cost_currency: Default currency for namespace usage records.
+        pricing_version: Optional pricing table or contract version.
     """
 
     service_name: str = "mcp-portal"
     otlp_endpoint: str | None = None
+    metrics_enabled: bool = True
+    cost_accounting_enabled: bool = True
+    include_tenant_metrics: bool = False
+    cost_currency: str = "USD"
+    pricing_version: str | None = None
 
     @property
     def enabled(self) -> bool:
@@ -550,6 +560,11 @@ class ObservabilitySettings:
             "enabled": self.enabled,
             "service_name": self.service_name,
             "otlp_endpoint_configured": self.otlp_endpoint is not None,
+            "metrics_enabled": self.metrics_enabled,
+            "cost_accounting_enabled": self.cost_accounting_enabled,
+            "include_tenant_metrics": self.include_tenant_metrics,
+            "cost_currency": self.cost_currency,
+            "pricing_version": self.pricing_version,
         }
 
 
@@ -863,6 +878,15 @@ class Settings:
             observability=ObservabilitySettings(
                 service_name=os.getenv("OTEL_SERVICE_NAME", "mcp-portal"),
                 otlp_endpoint=_optional_env("OTEL_EXPORTER_OTLP_ENDPOINT"),
+                metrics_enabled=_bool_env("MCP_PORTAL_METRICS_ENABLED", default=True),
+                cost_accounting_enabled=_bool_env(
+                    "MCP_PORTAL_COST_ACCOUNTING_ENABLED", default=True
+                ),
+                include_tenant_metrics=_bool_env(
+                    "MCP_PORTAL_METRICS_INCLUDE_TENANT", default=False
+                ),
+                cost_currency=(_optional_env("MCP_PORTAL_COST_CURRENCY") or "USD").upper(),
+                pricing_version=_optional_env("MCP_PORTAL_PRICING_VERSION"),
             ),
             database=DatabaseSettings(
                 provider=_database_provider_env("MCP_PORTAL_DATABASE_PROVIDER", default="oracle"),

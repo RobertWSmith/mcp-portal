@@ -322,9 +322,35 @@ scope.
 | --- | --- | --- | --- |
 | `OTEL_SERVICE_NAME` | `mcp-portal` | No | Service name exported to OpenTelemetry launchers. MCP Portal sets this process environment variable only when it is not already present. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | No | OTLP collector endpoint. When set, MCP Portal also exposes it to OpenTelemetry launchers if the process environment does not already contain a value. |
+| `MCP_PORTAL_METRICS_ENABLED` | `true` | No | Emit tool, admission, downstream, usage, and estimated-cost measurements through the active OpenTelemetry meter provider. |
+| `MCP_PORTAL_COST_ACCOUNTING_ENABLED` | `true` | No | Append detailed tenant- and request-bound usage records to the configured cost sink. The default sink emits canonical JSON on the `mcp_portal.cost` logger. |
+| `MCP_PORTAL_METRICS_INCLUDE_TENANT` | `false` | No | Add tenant ID to metric dimensions. Leave disabled for large tenant populations to control cardinality; detailed cost records always retain the trusted tenant. |
+| `MCP_PORTAL_COST_CURRENCY` | `USD` | No | Default currency attached to estimated costs reported by namespaces. |
+| `MCP_PORTAL_PRICING_VERSION` | unset | Recommended | Pricing table or enterprise contract version used to calculate estimates. Store the version with every estimate so later rate changes do not alter historical meaning. |
 
-FastMCP emits OpenTelemetry spans when launched with an OpenTelemetry SDK or
-`opentelemetry-instrument`.
+FastMCP emits spans and MCP Portal emits runtime metrics when launched with an OpenTelemetry
+SDK or `opentelemetry-instrument`. The API layer is safe when no SDK is attached: metric
+instruments become no-ops while detailed cost records continue through their configured sink.
+
+Namespaces report metered consumption after receiving authoritative provider usage. Pricing is
+not hard-coded into the portal because provider and contract rates change independently of code:
+
+```python
+await context.record_usage(
+    provider="azure.ai.openai",
+    service="language-model",
+    operation="chat",
+    sku="gpt-enterprise",
+    quantity=response.usage.input_tokens,
+    unit="input_token",
+    estimated_cost="0.0125",
+)
+```
+
+Call `record_usage` separately for input, output, cached, image, request, document, or compute
+units when their rates differ. Detailed records contain request, tool, subject, tenant, client,
+SKU, currency, and pricing-version fields but never prompts, responses, credentials, or raw tool
+arguments.
 
 ## Secret Handling
 

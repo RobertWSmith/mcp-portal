@@ -47,11 +47,15 @@ from mcp_portal.namespaces import (
     build_namespace_runtimes,
     iter_namespaces,
 )
-from mcp_portal.observability import configure_observability_environment
+from mcp_portal.observability import (
+    configure_observability_environment,
+    create_telemetry_recorder,
+)
 from mcp_portal.policy import PolicyDecision, PolicyEngine, ScopePolicyEngine
 from mcp_portal.resilience import AdmissionController, QuotaBackend
 from mcp_portal.security import identity_from_access_token, invocation_scope, new_invocation
 from mcp_portal.tasks import MemoryTaskStore
+from mcp_portal.telemetry import CostSink, TelemetryRecorder
 
 Transport = Literal["stdio", "http", "sse", "streamable-http"]
 HTTP_TRANSPORTS: set[Transport] = {"http", "sse", "streamable-http"}
@@ -68,6 +72,7 @@ class PortalFastMCP(FastMCP):
         audit_sink: AuditSink | None = None,
         quota_backend: QuotaBackend | None = None,
         approval_verifier: ApprovalVerifier | None = None,
+        telemetry: TelemetryRecorder | None = None,
         enforce_request_controls: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -80,6 +85,7 @@ class PortalFastMCP(FastMCP):
             audit_sink: Optional append-only audit destination.
             quota_backend: Optional distributed quota implementation.
             approval_verifier: Optional out-of-band approval receipt verifier.
+            telemetry: Optional shared metrics and cost-accounting recorder.
             enforce_request_controls: Whether rate and size controls are active.
             kwargs: Keyword SDK server arguments.
         """
@@ -89,6 +95,7 @@ class PortalFastMCP(FastMCP):
         self.audit_sink = audit_sink or LoggingAuditSink()
         self.enforce_request_controls = enforce_request_controls
         self.approval_verifier = approval_verifier or RejectingApprovalVerifier()
+        self.telemetry = telemetry or create_telemetry_recorder(selected_settings)
         self._component_namespaces: dict[tuple[str, str], Namespace] = {}
         self.admission = AdmissionController(
             selected_settings.enterprise.max_concurrent_requests, quota_backend
@@ -292,6 +299,11 @@ class PortalFastMCP(FastMCP):
                     audit_event("authorization", invocation, arguments, decision=decision)
                 )
             if not decision.allowed:
+                self.telemetry.record_tool_call(
+                    invocation,
+                    outcome="denied",
+                    duration_seconds=time.perf_counter() - started,
+                )
                 raise PermissionPortalError(
                     "Tool invocation is not authorized.",
                     details={"required_scopes": sorted(decision.required_scopes)},
@@ -309,6 +321,11 @@ class PortalFastMCP(FastMCP):
                             decision=PolicyDecision(False, "approval receipt missing or invalid"),
                         )
                     )
+                self.telemetry.record_tool_call(
+                    invocation,
+                    outcome="denied",
+                    duration_seconds=time.perf_counter() - started,
+                )
                 raise PermissionPortalError(
                     "Destructive tool invocation requires an approved out-of-band receipt."
                 )
@@ -316,16 +333,27 @@ class PortalFastMCP(FastMCP):
             subject = invocation.identity.subject or invocation.identity.client_id or "anonymous"
             quota_key = f"{invocation.identity.tenant_id or '-'}:{subject}:{name}"
             if self.enforce_request_controls:
-                await self.admission.check_quota(
-                    quota_key,
-                    self.portal_settings.middleware.rate_limit_per_second,
-                    self.portal_settings.middleware.rate_limit_burst,
-                )
+                try:
+                    await self.admission.check_quota(
+                        quota_key,
+                        self.portal_settings.middleware.rate_limit_per_second,
+                        self.portal_settings.middleware.rate_limit_burst,
+                    )
+                except PermissionPortalError:
+                    self.telemetry.record_tool_call(
+                        invocation,
+                        outcome="quota_rejected",
+                        duration_seconds=time.perf_counter() - started,
+                    )
+                    raise
 
             outcome = "succeeded"
+            admission_started = time.perf_counter()
+            admission_wait_seconds = 0.0
             try:
                 with anyio.fail_after(invocation.deadline_seconds):
                     async with self.admission.capacity_for(name, tool_concurrency):
+                        admission_wait_seconds = time.perf_counter() - admission_started
                         result = await super().call_tool(name, arguments)
                 if (
                     self.enforce_request_controls
@@ -348,6 +376,14 @@ class PortalFastMCP(FastMCP):
                 raise
             finally:
                 duration_ms = (time.perf_counter() - started) * 1000
+                if admission_wait_seconds == 0:
+                    admission_wait_seconds = time.perf_counter() - admission_started
+                self.telemetry.record_tool_call(
+                    invocation,
+                    outcome=outcome,
+                    duration_seconds=duration_ms / 1000,
+                    admission_wait_seconds=admission_wait_seconds,
+                )
                 if self.portal_settings.enterprise.audit_enabled:
                     await self.audit_sink.append(
                         audit_event(
@@ -618,6 +654,8 @@ def create_mcp(
     quota_backend: QuotaBackend | None = None,
     approval_verifier: ApprovalVerifier | None = None,
     task_store: MemoryTaskStore | None = None,
+    telemetry: TelemetryRecorder | None = None,
+    cost_sink: CostSink | None = None,
 ) -> FastMCP:
     """Create the top-level FastMCP server and mount namespace servers.
 
@@ -629,12 +667,20 @@ def create_mcp(
         include_production_middleware: Retained for CLI compatibility. The SDK
             FastMCP server does not expose FastMCP 3 middleware hooks.
         clients: Optional shared client factory registry.
+        policy_engine: Optional external authorization policy adapter.
+        audit_sink: Optional append-only audit destination.
+        quota_backend: Optional shared quota backend.
+        approval_verifier: Optional approval receipt verifier.
+        task_store: Optional shared authorization-bound task store.
+        telemetry: Optional metrics and cost-accounting recorder.
+        cost_sink: Optional detailed accounting destination used by the default recorder.
 
     Returns:
         A configured FastMCP server with all namespace servers mounted.
     """
     settings = settings or Settings.from_env()
     configure_observability_environment(settings)
+    shared_telemetry = telemetry or create_telemetry_recorder(settings, cost_sink=cost_sink)
     namespace_manifests = tuple(
         namespaces or iter_namespaces(strict=settings.namespace_discovery.strict)
     )
@@ -644,15 +690,16 @@ def create_mcp(
             namespace for namespace in namespace_manifests if namespace.name in approved
         )
     shared_clients = (
-        clients.with_resilience(settings)
+        clients.with_resilience(settings, telemetry=shared_telemetry)
         if clients is not None
-        else default_client_factories(settings)
+        else default_client_factories(settings, telemetry=shared_telemetry)
     )
     namespace_runtimes = build_namespace_runtimes(
         namespace_manifests,
         settings,
         clients=shared_clients,
         tasks=task_store,
+        telemetry=shared_telemetry,
     )
     auth_provider = create_auth_provider(settings)
     enforce_request_controls = (
@@ -674,6 +721,7 @@ def create_mcp(
         audit_sink=audit_sink,
         quota_backend=quota_backend,
         approval_verifier=approval_verifier,
+        telemetry=shared_telemetry,
         enforce_request_controls=enforce_request_controls,
     )
     server.namespace_runtimes = namespace_runtimes
@@ -692,12 +740,19 @@ def create_mcp(
     return server
 
 
-def create_production_mcp(settings: Settings | None = None) -> FastMCP:
+def create_production_mcp(
+    settings: Settings | None = None,
+    *,
+    telemetry: TelemetryRecorder | None = None,
+    cost_sink: CostSink | None = None,
+) -> FastMCP:
     """Create the production FastMCP server.
 
     Args:
         settings: Optional settings object. When omitted, settings are loaded from the
             environment.
+        telemetry: Optional metrics and cost-accounting recorder.
+        cost_sink: Optional detailed accounting destination used by the default recorder.
 
     Returns:
         A configured production server without development UI providers.
@@ -708,6 +763,8 @@ def create_production_mcp(settings: Settings | None = None) -> FastMCP:
         selected_settings,
         include_debug_ui=False,
         include_production_middleware=True,
+        telemetry=telemetry,
+        cost_sink=cost_sink,
     )
     add_operational_routes(server, selected_settings)
     return server

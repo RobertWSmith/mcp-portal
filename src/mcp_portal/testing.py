@@ -20,6 +20,7 @@ from mcp_portal.namespaces import (
     build_namespace_context,
 )
 from mcp_portal.redaction import Redactor
+from mcp_portal.telemetry import TelemetryRecorder
 
 
 def create_test_settings(
@@ -94,6 +95,7 @@ def create_namespace_test_context(
     clients: ClientFactories | None = None,
     redactor: Redactor | None = None,
     clock: Clock | None = None,
+    telemetry: TelemetryRecorder | None = None,
 ) -> NamespaceContext:
     """Create a namespace context for direct unit tests.
 
@@ -103,6 +105,7 @@ def create_namespace_test_context(
         clients: Optional external client factory registry.
         redactor: Optional diagnostic redactor.
         clock: Optional test clock.
+        telemetry: Optional metrics and cost-accounting recorder.
 
     Returns:
         A namespace context built through the production helper.
@@ -130,6 +133,7 @@ def create_namespace_test_context(
             )
         ),
         clock=clock,
+        telemetry=telemetry,
     )
 
 

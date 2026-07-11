@@ -30,7 +30,7 @@ accepted values, loading behavior, and production requirements.
 - `MCP_PORTAL_HTTP_PATH` and `MCP_PORTAL_HEALTH_PATH`
 - `MCP_PORTAL_DATABASE_PROVIDER`, `MCP_PORTAL_DATABASE_SQLALCHEMY_URL`, and `MCP_PORTAL_ORACLE_*`
 - `MCP_PORTAL_LANGCHAIN_MONGODB_*` for LangChain MongoDB connectors
-- `OTEL_SERVICE_NAME` and `OTEL_EXPORTER_OTLP_ENDPOINT`
+- `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, and `MCP_PORTAL_*` telemetry controls
 
 The health namespace exposes only non-secret configuration metadata. It never returns
 raw API keys or Azure client secrets.
@@ -207,9 +207,11 @@ fastmcp run fastmcp.prod.json
 The production config includes SQLAlchemy plus the Oracle dialect driver and uses the
 production server factory.
 
-FastMCP emits OpenTelemetry spans when launched with an OpenTelemetry SDK or
-`opentelemetry-instrument`. Set `OTEL_SERVICE_NAME` and
-`OTEL_EXPORTER_OTLP_ENDPOINT` to route traces to your collector.
+FastMCP emits spans and MCP Portal emits tool, admission, downstream, usage, and estimated-cost
+metrics when an OpenTelemetry SDK is attached. Set `OTEL_SERVICE_NAME` and
+`OTEL_EXPORTER_OTLP_ENDPOINT` to route telemetry to your collector. Namespaces report exact
+provider usage and versioned cost estimates through `context.record_usage(...)`; detailed
+tenant/request accounting records are kept separate from low-cardinality dashboard metrics.
 
 ## Contracts
 
