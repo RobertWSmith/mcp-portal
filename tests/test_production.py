@@ -686,19 +686,7 @@ def test_production_asgi_app_exposes_health_route() -> None:
         response = client.get("/healthz")
 
     assert response.status_code == 200
-    test_json = response.json()
-    assert_json = {
-        "status": "healthy",
-        "service": "mcp-portal",
-        "mcp_path": "/mcp",
-        "oracle_preferred": True,
-        "sqlalchemy_enforced": True,
-        "database_configured": False,
-        "oracle_configured": False,
-        "mongodb_configured": False,
-    }
-    for key, value in assert_json.items():
-        assert test_json[key] == value
+    assert response.json() == {"status": "alive", "service": "mcp-portal"}
 
 
 def test_observability_environment_uses_settings(monkeypatch) -> None:

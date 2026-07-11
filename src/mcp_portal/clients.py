@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -11,8 +12,10 @@ from mcp_portal.config import (
     Settings,
 )
 from mcp_portal.errors import ConfigurationPortalError
+from mcp_portal.resilience import CircuitBreakerRegistry, CircuitState
 
 ClientFactory = Callable[[], Any]
+ReadinessCheck = Callable[[], Any | Awaitable[Any]]
 
 
 @dataclass(frozen=True)
@@ -26,12 +29,16 @@ class ClientFactories:
 
     factories: Mapping[str, ClientFactory] = field(default_factory=dict)
     shared_factories: frozenset[str] = field(default_factory=frozenset)
+    readiness_checks: Mapping[str, ReadinessCheck] = field(default_factory=dict)
+    circuit_breakers: CircuitBreakerRegistry = field(default_factory=CircuitBreakerRegistry)
+    downstream_timeout_seconds: float = 45.0
     _shared_clients: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Normalize factory mappings after dataclass initialization."""
         object.__setattr__(self, "factories", dict(self.factories))
         object.__setattr__(self, "shared_factories", frozenset(self.shared_factories))
+        object.__setattr__(self, "readiness_checks", dict(self.readiness_checks))
 
     def get(self, name: str) -> ClientFactory | None:
         """Return a client factory if one is registered.
@@ -117,12 +124,91 @@ class ClientFactories:
 
         self._shared_clients.clear()
 
+    async def execute(
+        self,
+        name: str,
+        operation: Callable[[], Any | Awaitable[Any]],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> Any:
+        """Execute a downstream operation through its named circuit breaker.
+
+        Namespaces should use this boundary for network and database operations so
+        repeated upstream failures stop consuming request capacity.
+
+        Args:
+            name: Registered downstream dependency name.
+            operation: Zero-argument downstream operation.
+            timeout_seconds: Optional operation-specific deadline.
+
+        Returns:
+            The downstream operation result.
+        """
+        self.require(name)
+        return await self.circuit_breakers.execute(
+            name,
+            operation,
+            timeout_seconds=timeout_seconds or self.downstream_timeout_seconds,
+        )
+
+    async def check_readiness(self) -> dict[str, dict[str, Any]]:
+        """Run registered dependency probes concurrently through their circuits.
+
+        Returns:
+            Dependency names mapped to safe readiness and circuit state.
+        """
+
+        async def check(name: str, readiness_check: ReadinessCheck) -> tuple[str, dict[str, Any]]:
+            """Run one readiness probe and normalize its public result.
+
+            Args:
+                name: Registered dependency name.
+                readiness_check: Dependency-specific health operation.
+
+            Returns:
+                Dependency name paired with public readiness state.
+            """
+            try:
+                await self.circuit_breakers.execute(
+                    name,
+                    readiness_check,
+                    timeout_seconds=self.downstream_timeout_seconds,
+                )
+            except Exception as error:
+                return name, {
+                    "status": "error",
+                    "error_type": type(error).__name__,
+                    "circuit": self.circuit_breakers.get(name).state.value,
+                }
+            return name, {
+                "status": "ok",
+                "circuit": self.circuit_breakers.get(name).state.value,
+            }
+
+        results = await asyncio.gather(
+            *(
+                check(name, readiness_check)
+                for name, readiness_check in self.readiness_checks.items()
+            )
+        )
+        statuses = dict(sorted(results))
+        for name, snapshot in self.circuit_breakers.snapshot().items():
+            statuses.setdefault(
+                name,
+                {
+                    "status": ("ok" if snapshot["state"] == CircuitState.CLOSED.value else "error"),
+                    "circuit": snapshot["state"],
+                },
+            )
+        return statuses
+
     def with_factory(
         self,
         name: str,
         factory: ClientFactory,
         *,
         shared: bool = False,
+        readiness_check: ReadinessCheck | None = None,
     ) -> "ClientFactories":
         """Return a copy with one additional client factory.
 
@@ -141,8 +227,37 @@ class ClientFactories:
             shared_factories.add(name)
         else:
             shared_factories.discard(name)
+        readiness_checks = dict(self.readiness_checks)
+        if readiness_check is not None:
+            readiness_checks[name] = readiness_check
 
-        return ClientFactories(factories, frozenset(shared_factories))
+        return ClientFactories(
+            factories,
+            frozenset(shared_factories),
+            readiness_checks,
+            self.circuit_breakers,
+            self.downstream_timeout_seconds,
+        )
+
+    def with_resilience(self, settings: Settings) -> "ClientFactories":
+        """Return a registry configured with deployment circuit-breaker policy.
+
+        Args:
+            settings: Deployment settings containing resilience defaults.
+
+        Returns:
+            A copied registry with a fresh configured breaker registry.
+        """
+        return ClientFactories(
+            self.factories,
+            self.shared_factories,
+            self.readiness_checks,
+            CircuitBreakerRegistry(
+                settings.enterprise.circuit_breaker_failure_threshold,
+                settings.enterprise.circuit_breaker_recovery_seconds,
+            ),
+            settings.enterprise.downstream_timeout_seconds,
+        )
 
 
 @dataclass(frozen=True)
@@ -522,18 +637,45 @@ def default_client_factories(settings: Settings | None = None) -> ClientFactorie
         A client registry ready for namespace-specific injection.
     """
     factories = ClientFactories()
+    if settings is not None:
+        factories = factories.with_resilience(settings)
     if settings is not None and settings.database.provider != "none":
         if settings.database.sqlalchemy_configured:
+
+            def database_ready() -> None:
+                """Execute a minimal SQL query through the configured engine."""
+                from sqlalchemy import text
+
+                engine = factories.shared("database")
+                with engine.connect() as connection:
+                    connection.execute(text("SELECT 1"))
+
             factories = factories.with_factory(
                 "database",
                 lambda: _create_sqlalchemy_engine(settings),
                 shared=True,
+                readiness_check=database_ready,
             )
     if settings is not None and settings.mongodb.configured:
+
+        def mongodb_ready() -> None:
+            """Ping MongoDB without retaining an additional readiness client."""
+            from pymongo import MongoClient
+
+            client = MongoClient(
+                settings.mongodb.connection_string,
+                serverSelectionTimeoutMS=int(settings.enterprise.downstream_timeout_seconds * 1000),
+            )
+            try:
+                client.admin.command("ping")
+            finally:
+                client.close()
+
         factories = factories.with_factory(
             "langchain_mongodb",
             lambda: _create_langchain_mongodb_connectors(settings),
             shared=True,
+            readiness_check=mongodb_ready,
         )
 
     return factories

@@ -55,6 +55,11 @@ PORTAL_ENV_NAMES = (
     "MCP_PORTAL_RATE_LIMIT_PER_SECOND",
     "MCP_PORTAL_RATE_LIMIT_BURST",
     "MCP_PORTAL_RESPONSE_MAX_BYTES",
+    "MCP_PORTAL_TOOL_TIMEOUT_OVERRIDES",
+    "MCP_PORTAL_TOOL_CONCURRENCY_LIMITS",
+    "MCP_PORTAL_DOWNSTREAM_TIMEOUT_SECONDS",
+    "MCP_PORTAL_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+    "MCP_PORTAL_CIRCUIT_BREAKER_RECOVERY_SECONDS",
     "MCP_PORTAL_HTTP_PATH",
     "MCP_PORTAL_HEALTH_PATH",
     "MCP_PORTAL_JSON_RESPONSE",
@@ -359,6 +364,23 @@ def test_settings_defaults_and_placeholder_key(monkeypatch) -> None:
     assert snapshot["namespace_discovery"] == {"strict": False}
     assert snapshot["database"]["oracle_preferred"] is True
     assert snapshot["mongodb"]["configured"] is False
+
+
+def test_settings_load_per_tool_and_circuit_breaker_controls(monkeypatch) -> None:
+    """Verify deployment resilience overrides parse into typed settings."""
+    monkeypatch.setenv("MCP_PORTAL_TOOL_TIMEOUT_OVERRIDES", "finance_export=5.5;health_ping=1")
+    monkeypatch.setenv("MCP_PORTAL_TOOL_CONCURRENCY_LIMITS", "finance_export=2;health_ping=10")
+    monkeypatch.setenv("MCP_PORTAL_DOWNSTREAM_TIMEOUT_SECONDS", "3.5")
+    monkeypatch.setenv("MCP_PORTAL_CIRCUIT_BREAKER_FAILURE_THRESHOLD", "4")
+    monkeypatch.setenv("MCP_PORTAL_CIRCUIT_BREAKER_RECOVERY_SECONDS", "12")
+
+    enterprise = Settings.from_env(Path("does-not-exist.env")).enterprise
+
+    assert enterprise.tool_timeout_overrides == {"finance_export": 5.5, "health_ping": 1.0}
+    assert enterprise.tool_concurrency_limits == {"finance_export": 2, "health_ping": 10}
+    assert enterprise.downstream_timeout_seconds == 3.5
+    assert enterprise.circuit_breaker_failure_threshold == 4
+    assert enterprise.circuit_breaker_recovery_seconds == 12
 
 
 def test_azure_openai_provider_uses_azure_identity_without_service_principal(

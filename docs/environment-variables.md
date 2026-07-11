@@ -71,8 +71,8 @@ Optional service-principal environment variables consumed by Azure Identity:
 | --- | --- | --- | --- |
 | `MCP_PORTAL_HEALTH_ENABLED` | `true` | No | Enables or disables the namespaced health tools. This does not remove the production operational health route. |
 | `MCP_PORTAL_HTTP_PATH` | `/mcp` | No | MCP endpoint path for ASGI and production HTTP deployments. CLI `--path` can override the run path for HTTP-based transports. |
-| `MCP_PORTAL_HEALTH_PATH` | `/healthz` | No | Unauthenticated operational health endpoint path added by the production server profile. |
-| `MCP_PORTAL_READINESS_PATH` | `/readyz` | No | Unauthenticated readiness endpoint. Returns 503 when a registered namespace reports an error. |
+| `MCP_PORTAL_HEALTH_PATH` | `/healthz` | No | Dependency-free liveness endpoint. It reports only whether the portal process can serve HTTP. |
+| `MCP_PORTAL_READINESS_PATH` | `/readyz` | No | Readiness endpoint. Returns 503 when a namespace, registered dependency probe, or downstream circuit is unhealthy. |
 | `MCP_PORTAL_JSON_RESPONSE` | unset | No | Optional FastMCP JSON response mode for HTTP-based transports. Leave blank to use FastMCP defaults. |
 | `MCP_PORTAL_STATELESS_HTTP` | unset | No | Optional FastMCP stateless HTTP mode. Leave blank to use FastMCP defaults. |
 
@@ -278,12 +278,31 @@ cache = connectors.cache()
 | `MCP_PORTAL_REQUIRE_TENANT` | `false` | No | Deny authenticated tool calls without the configured verified tenant claim. Enable for multi-tenant deployments. |
 | `MCP_PORTAL_TENANT_CLAIM` | `tenant_id` | No | Verified token claim used to partition tenant state. |
 | `MCP_PORTAL_AUDIT_ENABLED` | `true` | No | Emit sanitized authorization and completion audit events. |
-| `MCP_PORTAL_TOOL_TIMEOUT_SECONDS` | `30` | No | Default deadline applied to every tool invocation. |
+| `MCP_PORTAL_TOOL_TIMEOUT_SECONDS` | `45` | No | Default deadline applied to every tool invocation. |
+| `MCP_PORTAL_TOOL_TIMEOUT_OVERRIDES` | unset | No | Semicolon-separated fully-qualified tool deadlines, for example `finance_export=120;search_query=5`. Deployment values override tool metadata. |
 | `MCP_PORTAL_MAX_CONCURRENT_REQUESTS` | `100` | No | Maximum concurrent in-process tool executions. |
+| `MCP_PORTAL_TOOL_CONCURRENCY_LIMITS` | unset | No | Semicolon-separated fully-qualified per-tool limits, for example `finance_export=2;search_query=20`. Per-tool slots are acquired before global capacity to avoid starvation. |
+| `MCP_PORTAL_DOWNSTREAM_TIMEOUT_SECONDS` | `45` | No | Default deadline for operations executed through the namespace downstream boundary. |
+| `MCP_PORTAL_CIRCUIT_BREAKER_FAILURE_THRESHOLD` | `5` | No | Consecutive downstream failures required to open a dependency circuit. |
+| `MCP_PORTAL_CIRCUIT_BREAKER_RECOVERY_SECONDS` | `30` | No | Open-circuit cooldown before one half-open recovery probe is admitted. |
 | `MCP_PORTAL_TASK_MAX_TTL_SECONDS` | `3600` | No | Maximum task retention duration accepted by the task store. |
 | `MCP_PORTAL_TASK_MAX_CONCURRENT_PER_SUBJECT` | `10` | No | Maximum working tasks owned by one authenticated subject. |
 | `MCP_PORTAL_EGRESS_ALLOWED_HOSTS` | unset | Recommended | Exact comma- or space-separated HTTPS hostname allowlist exposed to namespaces. |
 | `MCP_PORTAL_NAMESPACE_ALLOWLIST` | unset | Recommended | Namespace names admitted into this deployment. Empty retains automatic discovery behavior. |
+
+Tools may declare `timeout_seconds` and `max_concurrency` in their portal `_meta`; the
+fully-qualified environment maps take precedence. Namespace network and database operations
+should use the shared downstream boundary so timeouts, breaker state, and readiness agree:
+
+```python
+result = await context.downstream(
+    "records_api",
+    lambda: records_client.fetch(record_id),
+)
+```
+
+Register a dependency probe when adding a custom client factory. Probes run concurrently and
+their error details are reduced to safe exception types in `/readyz` responses.
 
 In-memory quota and task stores are reference implementations. Multi-instance deployments
 must provide shared quota and durable task adapters. Destructive tools require a configured

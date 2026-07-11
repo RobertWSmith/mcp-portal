@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -375,7 +375,8 @@ class HttpSettings:
 
     Attributes:
         path: MCP endpoint path for HTTP-based transports.
-        health_path: Unauthenticated operational health endpoint path.
+        health_path: Unauthenticated liveness endpoint path.
+        readiness_path: Unauthenticated dependency-readiness endpoint path.
         json_response: Optional FastMCP JSON response mode.
         stateless: Optional FastMCP stateless HTTP mode.
     """
@@ -413,7 +414,12 @@ class EnterpriseSettings:
         tenant_claim: Verified token claim used for tenant partitioning.
         audit_enabled: Whether request lifecycle audit events are emitted.
         tool_timeout_seconds: Default maximum tool execution time.
+        tool_timeout_overrides: Fully-qualified tool-specific deadline overrides.
         max_concurrent_requests: Maximum in-process concurrent tool calls.
+        tool_concurrency_limits: Fully-qualified per-tool concurrency limits.
+        downstream_timeout_seconds: Default deadline for downstream operations.
+        circuit_breaker_failure_threshold: Consecutive failures that open a circuit.
+        circuit_breaker_recovery_seconds: Cooldown before a half-open probe.
         task_max_ttl_seconds: Maximum task result retention period.
         task_max_concurrent_per_subject: Maximum working tasks for one owner.
         egress_allowed_hosts: Approved outbound DNS hostnames.
@@ -423,8 +429,13 @@ class EnterpriseSettings:
     require_tenant: bool = False
     tenant_claim: str = "tenant_id"
     audit_enabled: bool = True
-    tool_timeout_seconds: float = 30.0
+    tool_timeout_seconds: float = 45.0
+    tool_timeout_overrides: dict[str, float] = field(default_factory=dict)
     max_concurrent_requests: int = 100
+    tool_concurrency_limits: dict[str, int] = field(default_factory=dict)
+    downstream_timeout_seconds: float = 45.0
+    circuit_breaker_failure_threshold: int = 5
+    circuit_breaker_recovery_seconds: float = 30.0
     task_max_ttl_seconds: int = 3600
     task_max_concurrent_per_subject: int = 10
     egress_allowed_hosts: tuple[str, ...] = ()
@@ -442,12 +453,51 @@ class EnterpriseSettings:
             "tenant_claim": self.tenant_claim,
             "audit_enabled": self.audit_enabled,
             "tool_timeout_seconds": self.tool_timeout_seconds,
+            "tool_timeout_overrides": dict(sorted(self.tool_timeout_overrides.items())),
             "max_concurrent_requests": self.max_concurrent_requests,
+            "tool_concurrency_limits": dict(sorted(self.tool_concurrency_limits.items())),
+            "downstream_timeout_seconds": self.downstream_timeout_seconds,
+            "circuit_breaker_failure_threshold": self.circuit_breaker_failure_threshold,
+            "circuit_breaker_recovery_seconds": self.circuit_breaker_recovery_seconds,
             "task_max_ttl_seconds": self.task_max_ttl_seconds,
             "task_max_concurrent_per_subject": self.task_max_concurrent_per_subject,
             "egress_allowlist_configured": bool(self.egress_allowed_hosts),
             "namespace_allowlist": list(self.namespace_allowlist),
         }
+
+    def tool_timeout(self, name: str, meta: Mapping[str, object] | None = None) -> float:
+        """Resolve a tool deadline using deployment, tool, then global precedence.
+
+        Args:
+            name: Fully-qualified tool name.
+            meta: Optional governed tool metadata.
+
+        Returns:
+            Positive execution deadline in seconds.
+        """
+        if name in self.tool_timeout_overrides:
+            return self.tool_timeout_overrides[name]
+        metadata_value = (meta or {}).get("timeout_seconds")
+        if isinstance(metadata_value, (int, float)) and not isinstance(metadata_value, bool):
+            return float(metadata_value)
+        return self.tool_timeout_seconds
+
+    def tool_concurrency(self, name: str, meta: Mapping[str, object] | None = None) -> int:
+        """Resolve a per-tool concurrency limit using deployment override precedence.
+
+        Args:
+            name: Fully-qualified tool name.
+            meta: Optional governed tool metadata.
+
+        Returns:
+            Positive maximum concurrent invocation count.
+        """
+        if name in self.tool_concurrency_limits:
+            return self.tool_concurrency_limits[name]
+        metadata_value = (meta or {}).get("max_concurrency")
+        if isinstance(metadata_value, int) and not isinstance(metadata_value, bool):
+            return metadata_value
+        return self.max_concurrent_requests
 
 
 @dataclass(frozen=True)
@@ -783,8 +833,23 @@ class Settings:
                 require_tenant=_bool_env("MCP_PORTAL_REQUIRE_TENANT", default=False),
                 tenant_claim=(_optional_env("MCP_PORTAL_TENANT_CLAIM") or "tenant_id"),
                 audit_enabled=_bool_env("MCP_PORTAL_AUDIT_ENABLED", default=True),
-                tool_timeout_seconds=_float_env("MCP_PORTAL_TOOL_TIMEOUT_SECONDS", default=30.0),
+                tool_timeout_seconds=_float_env("MCP_PORTAL_TOOL_TIMEOUT_SECONDS", default=45.0),
+                tool_timeout_overrides=_number_map_env(
+                    "MCP_PORTAL_TOOL_TIMEOUT_OVERRIDES", parser=float
+                ),
                 max_concurrent_requests=_int_env("MCP_PORTAL_MAX_CONCURRENT_REQUESTS", default=100),
+                tool_concurrency_limits=_number_map_env(
+                    "MCP_PORTAL_TOOL_CONCURRENCY_LIMITS", parser=int
+                ),
+                downstream_timeout_seconds=_float_env(
+                    "MCP_PORTAL_DOWNSTREAM_TIMEOUT_SECONDS", default=45.0
+                ),
+                circuit_breaker_failure_threshold=_int_env(
+                    "MCP_PORTAL_CIRCUIT_BREAKER_FAILURE_THRESHOLD", default=5
+                ),
+                circuit_breaker_recovery_seconds=_float_env(
+                    "MCP_PORTAL_CIRCUIT_BREAKER_RECOVERY_SECONDS", default=30.0
+                ),
                 task_max_ttl_seconds=_int_env("MCP_PORTAL_TASK_MAX_TTL_SECONDS", default=3600),
                 task_max_concurrent_per_subject=_int_env(
                     "MCP_PORTAL_TASK_MAX_CONCURRENT_PER_SUBJECT", default=10
@@ -958,8 +1023,18 @@ class Settings:
 
         if self.enterprise.tool_timeout_seconds <= 0:
             problems.append("tool timeout must be positive")
+        if any(value <= 0 for value in self.enterprise.tool_timeout_overrides.values()):
+            problems.append("tool timeout overrides must be positive")
         if self.enterprise.max_concurrent_requests <= 0:
             problems.append("maximum concurrent requests must be positive")
+        if any(value <= 0 for value in self.enterprise.tool_concurrency_limits.values()):
+            problems.append("tool concurrency limits must be positive")
+        if self.enterprise.downstream_timeout_seconds <= 0:
+            problems.append("downstream timeout must be positive")
+        if self.enterprise.circuit_breaker_failure_threshold <= 0:
+            problems.append("circuit-breaker failure threshold must be positive")
+        if self.enterprise.circuit_breaker_recovery_seconds <= 0:
+            problems.append("circuit-breaker recovery time must be positive")
 
         if problems:
             raise ConfigurationPortalError(
@@ -1133,6 +1208,43 @@ def _csv_env(name: str) -> tuple[str, ...]:
         return ()
 
     return tuple(part for part in value.replace(",", " ").split() if part)
+
+
+def _number_map_env(
+    name: str,
+    *,
+    parser: Callable[[str], float | int],
+) -> dict[str, float | int]:
+    """Read semicolon-separated ``name=value`` numeric overrides.
+
+    Invalid entries make the complete optional override map empty so deployments do
+    not silently apply only part of an intended policy.
+
+    Args:
+        name: Environment variable name to read.
+        parser: Numeric parser such as ``int`` or ``float``.
+
+    Returns:
+        Parsed name-to-number overrides, or an empty mapping when invalid.
+    """
+    value = _optional_env(name)
+    if value is None:
+        return {}
+
+    result: dict[str, float | int] = {}
+    try:
+        for raw_entry in value.split(";"):
+            entry = raw_entry.strip()
+            if not entry or "=" not in entry:
+                return {}
+            key, raw_number = entry.split("=", maxsplit=1)
+            key = key.strip()
+            if not key:
+                return {}
+            result[key] = parser(raw_number.strip())
+    except ValueError:
+        return {}
+    return result
 
 
 def _auth_provider_env(name: str, *, default: AuthProviderName) -> AuthProviderName:

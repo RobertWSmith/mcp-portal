@@ -32,7 +32,13 @@ from mcp_portal.errors import (
 )
 from mcp_portal.namespaces import Namespace, NamespaceProvider
 from mcp_portal.policy import PolicyDecision, ScopePolicyEngine
-from mcp_portal.resilience import AdmissionController, MemoryQuotaBackend
+from mcp_portal.clients import ClientFactories
+from mcp_portal.resilience import (
+    AdmissionController,
+    CircuitBreaker,
+    CircuitState,
+    MemoryQuotaBackend,
+)
 from mcp_portal.security import (
     InvocationContext,
     InvocationIdentity,
@@ -41,7 +47,7 @@ from mcp_portal.security import (
     reset_invocation,
     set_invocation,
 )
-from mcp_portal.server import create_mcp, create_production_mcp
+from mcp_portal.server import add_operational_routes, create_mcp, create_production_mcp
 from mcp_portal.tasks import MemoryTaskStore
 from mcp_portal.testing import create_test_settings
 
@@ -298,6 +304,135 @@ async def test_deadline_and_response_size_are_enforced() -> None:
     )
     with pytest.raises(UpstreamPortalError):
         await normal.call_tool("health_ping", {})
+
+
+@pytest.mark.asyncio
+async def test_per_tool_deadline_and_concurrency_overrides_are_enforced() -> None:
+    """Verify fully-qualified deployment overrides govern each tool independently."""
+    active = 0
+    maximum_active = 0
+
+    def controlled_provider(context) -> NamespaceProvider:
+        """Create tools with deliberately looser metadata than deployment policy."""
+        _ = context
+        provider = NamespaceProvider("controlled")
+
+        @provider.tool(meta={"timeout_seconds": 1, "max_concurrency": 5})
+        async def work(delay: float = 0.02) -> str:
+            """Track concurrent work while sleeping briefly."""
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            try:
+                await anyio.sleep(delay)
+            finally:
+                active -= 1
+            return "done"
+
+        return provider
+
+    enterprise = EnterpriseSettings(
+        tool_timeout_seconds=1,
+        tool_timeout_overrides={"controlled_work": 0.2},
+        max_concurrent_requests=10,
+        tool_concurrency_limits={"controlled_work": 1},
+    )
+    server = create_mcp(
+        replace(create_test_settings(), enterprise=enterprise),
+        namespaces=[Namespace("controlled", controlled_provider)],
+        include_debug_ui=False,
+    )
+    results: list[object] = []
+
+    async def invoke() -> None:
+        """Invoke the controlled tool and retain its converted result."""
+        results.append(await server.call_tool("controlled_work", {}))
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(invoke)
+        group.start_soon(invoke)
+
+    assert len(results) == 2
+    assert maximum_active == 1
+    tool = server._tool_manager.get_tool("controlled_work")
+    assert tool is not None
+    assert enterprise.tool_timeout("controlled_work", tool.meta) == 0.2
+    assert enterprise.tool_concurrency("controlled_work", tool.meta) == 1
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_opens_rejects_and_recovers() -> None:
+    """Verify repeated failures open a circuit and one half-open success closes it."""
+    breaker = CircuitBreaker("records", failure_threshold=2, recovery_seconds=0.01)
+
+    def fail() -> None:
+        """Raise a deterministic downstream failure."""
+        raise RuntimeError("offline")
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="offline"):
+            await breaker.execute(fail, timeout_seconds=1)
+
+    assert breaker.state is CircuitState.OPEN
+    with pytest.raises(UpstreamPortalError, match="circuit is open"):
+        await breaker.execute(lambda: "blocked", timeout_seconds=1)
+
+    await anyio.sleep(0.02)
+    assert breaker.state is CircuitState.HALF_OPEN
+    assert await breaker.execute(lambda: "restored", timeout_seconds=1) == "restored"
+    assert breaker.snapshot()["state"] == "closed"
+
+
+@pytest.mark.asyncio
+async def test_downstream_timeout_and_readiness_expose_open_circuit() -> None:
+    """Verify dependency timeouts feed circuit state into readiness safely."""
+    clients = ClientFactories().with_factory(
+        "records",
+        lambda: object(),
+        readiness_check=lambda: (_ for _ in ()).throw(RuntimeError("secret endpoint")),
+    )
+    clients.circuit_breakers.failure_threshold = 1
+
+    async def slow() -> None:
+        """Exceed the downstream deadline."""
+        await anyio.sleep(0.05)
+
+    with pytest.raises(TimeoutPortalError):
+        await clients.execute("records", slow, timeout_seconds=0.01)
+
+    status = await clients.check_readiness()
+    assert status == {
+        "records": {
+            "status": "error",
+            "error_type": "UpstreamPortalError",
+            "circuit": "open",
+        }
+    }
+
+
+def test_readiness_fails_when_a_registered_dependency_is_unavailable() -> None:
+    """Verify readiness rejects traffic while liveness remains healthy."""
+    clients = ClientFactories().with_factory(
+        "records",
+        lambda: object(),
+        readiness_check=lambda: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    settings = replace(
+        create_test_settings(),
+        enterprise=EnterpriseSettings(circuit_breaker_failure_threshold=1),
+        http=HttpSettings(),
+    )
+    server = create_mcp(settings, include_debug_ui=False, clients=clients)
+    add_operational_routes(server, settings)
+
+    with TestClient(server.streamable_http_app()) as client:
+        live = client.get("/healthz")
+        ready = client.get("/readyz")
+
+    assert live.status_code == 200
+    assert live.json()["status"] == "alive"
+    assert ready.status_code == 503
+    assert ready.json()["dependencies"]["records"]["status"] == "error"
 
 
 def test_egress_policy_blocks_unapproved_and_private_destinations() -> None:

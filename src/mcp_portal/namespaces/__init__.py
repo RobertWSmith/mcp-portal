@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import logging
 import pkgutil
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -140,6 +140,29 @@ class NamespaceContext:
         """
         approved_audience = self.outbound_url(audience)
         return await self.credentials.credential_for(self.invocation().identity, approved_audience)
+
+    async def downstream(
+        self,
+        client: str,
+        operation: Callable[[], Any | Awaitable[Any]],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> Any:
+        """Execute a downstream call with timeout and circuit-breaker protection.
+
+        Args:
+            client: Registered dependency name used for readiness and breaker state.
+            operation: Zero-argument sync or async downstream operation.
+            timeout_seconds: Optional deadline override for this operation.
+
+        Returns:
+            The downstream operation result.
+        """
+        return await self.clients.execute(
+            client,
+            operation,
+            timeout_seconds=timeout_seconds,
+        )
 
 
 @dataclass(frozen=True)

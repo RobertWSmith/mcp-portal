@@ -88,8 +88,9 @@ uvicorn mcp_portal.asgi:app --host 0.0.0.0 --port 8000
 ```
 
 The app uses `MCP_PORTAL_HTTP_PATH` for the MCP endpoint and `MCP_PORTAL_HEALTH_PATH`
-for the liveness probe. `MCP_PORTAL_READINESS_PATH` exposes namespace readiness. By default
-the routes are `/mcp`, `/healthz`, and `/readyz`.
+for a dependency-free liveness probe. `MCP_PORTAL_READINESS_PATH` evaluates namespace hooks,
+registered dependency probes, and downstream circuit state. By default the routes are `/mcp`,
+`/healthz`, and `/readyz`.
 
 Remote HTTP deployments should set `MCP_PORTAL_AUTH_PROVIDER=jwt` with either
 `MCP_PORTAL_AUTH_JWT_JWKS_URI` or `MCP_PORTAL_AUTH_JWT_PUBLIC_KEY`. Static bearer
@@ -104,7 +105,10 @@ concurrency, deadlines, response limits, standard safety annotations, approval r
 and sanitized audit events.
 
 Enterprise namespaces receive trusted invocation identity/tenant context, an outbound HTTPS
-policy, a downstream credential-broker boundary, and an authorization-bound task store.
+policy, a downstream credential-broker boundary, and an authorization-bound task store. Tool
+deadlines and concurrency can be overridden by fully-qualified tool name. Namespace code can
+run external work through `context.downstream(...)` for bounded calls, closed/open/half-open
+circuit breaking, and dependency-aware readiness.
 See [the enterprise roadmap](docs/enterprise-roadmap.md) for production adapters and rollout
 phases.
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 # ruff: noqa: E402
 
 import argparse
+import inspect
 import json
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
@@ -112,7 +113,7 @@ class PortalFastMCP(FastMCP):
             invocation = new_invocation(
                 exposed_tool.name,
                 self.portal_settings.enterprise.tenant_claim,
-                self.portal_settings.enterprise.tool_timeout_seconds,
+                self.portal_settings.enterprise.tool_timeout(exposed_tool.name, tool.meta),
             )
             catalog_authorizer = getattr(self.policy_engine, "authorize_catalog", None)
             if catalog_authorizer is None:
@@ -280,8 +281,9 @@ class PortalFastMCP(FastMCP):
         invocation = new_invocation(
             name,
             self.portal_settings.enterprise.tenant_claim,
-            self.portal_settings.enterprise.tool_timeout_seconds,
+            self.portal_settings.enterprise.tool_timeout(name, tool.meta),
         )
+        tool_concurrency = self.portal_settings.enterprise.tool_concurrency(name, tool.meta)
         started = time.perf_counter()
         with invocation_scope(invocation):
             decision = await self.policy_engine.authorize(invocation, tool, arguments)
@@ -322,8 +324,8 @@ class PortalFastMCP(FastMCP):
 
             outcome = "succeeded"
             try:
-                async with self.admission.capacity:
-                    with anyio.fail_after(invocation.deadline_seconds):
+                with anyio.fail_after(invocation.deadline_seconds):
+                    async with self.admission.capacity_for(name, tool_concurrency):
                         result = await super().call_tool(name, arguments)
                 if (
                     self.enforce_request_controls
@@ -641,7 +643,11 @@ def create_mcp(
         namespace_manifests = tuple(
             namespace for namespace in namespace_manifests if namespace.name in approved
         )
-    shared_clients = clients or default_client_factories(settings)
+    shared_clients = (
+        clients.with_resilience(settings)
+        if clients is not None
+        else default_client_factories(settings)
+    )
     namespace_runtimes = build_namespace_runtimes(
         namespace_manifests,
         settings,
@@ -671,6 +677,7 @@ def create_mcp(
         enforce_request_controls=enforce_request_controls,
     )
     server.namespace_runtimes = namespace_runtimes
+    server.clients = shared_clients
 
     for runtime in namespace_runtimes:
         if not settings.namespace_enabled(runtime.namespace.name):
@@ -744,25 +751,19 @@ def add_operational_routes(server: FastMCP, settings: Settings) -> FastMCP:
 
     @server.custom_route(settings.http.health_path, methods=["GET"], include_in_schema=False)
     async def health_check(request: Request) -> Response:
-        """Return an operational health response.
+        """Return a dependency-free process liveness response.
 
         Args:
             request: Starlette request for the health endpoint.
 
         Returns:
-            A JSON health response for load balancers and probes.
+            A minimal JSON response suitable for a liveness probe.
         """
         _ = request
         return JSONResponse(
             {
-                "status": "healthy",
+                "status": "alive",
                 "service": "mcp-portal",
-                "mcp_path": settings.http.path,
-                "oracle_preferred": settings.database.provider == "oracle",
-                "sqlalchemy_enforced": True,
-                "database_configured": settings.database.sqlalchemy_configured,
-                "oracle_configured": settings.database.oracle_configured,
-                "mongodb_configured": settings.mongodb.configured,
             }
         )
 
@@ -787,13 +788,21 @@ def add_operational_routes(server: FastMCP, settings: Settings) -> FastMCP:
                 continue
             try:
                 status = runtime.namespace.health_check(runtime.context)
+                if inspect.isawaitable(status):
+                    status = await status
                 statuses[runtime.namespace.name] = status.state
                 ready = ready and status.state in {"ok", "warning"}
             except Exception:
                 statuses[runtime.namespace.name] = "error"
                 ready = False
+        dependency_statuses = await server.clients.check_readiness()
+        ready = ready and all(status["status"] == "ok" for status in dependency_statuses.values())
         return JSONResponse(
-            {"status": "ready" if ready else "not_ready", "namespaces": statuses},
+            {
+                "status": "ready" if ready else "not_ready",
+                "namespaces": statuses,
+                "dependencies": dependency_statuses,
+            },
             status_code=200 if ready else 503,
         )
 
