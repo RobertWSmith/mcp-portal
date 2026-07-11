@@ -54,7 +54,11 @@ class Redactor:
         """
         if isinstance(value, Mapping):
             return {
-                key: self.replacement if self._is_secret_key(str(key)) else self.redact(child)
+                key: (
+                    self.replacement
+                    if self._is_secret_key(str(key)) and not isinstance(child, Mapping)
+                    else self.redact(child)
+                )
                 for key, child in value.items()
             }
 
@@ -82,7 +86,9 @@ class Redactor:
             True when the key conventionally stores a secret value.
         """
         normalized = key.lower().replace("-", "_")
-        if normalized.startswith(("has_", "is_", "uses_")):
+        if normalized.startswith(("has_", "is_", "uses_")) or normalized.endswith(
+            ("_configured", "_scope", "_scopes")
+        ):
             return False
 
         return (

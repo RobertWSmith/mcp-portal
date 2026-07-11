@@ -4,7 +4,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from fastmcp import FastMCPApp
+from mcp.types import ToolAnnotations
 from prefab_ui.actions import CallTool, SetState
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
@@ -29,25 +29,42 @@ from prefab_ui.rx import RESULT, STATE
 
 from mcp_portal.config import Settings
 from mcp_portal.errors import InternalPortalError, PortalError
-from mcp_portal.namespaces import NamespaceDebugPanel, NamespaceRuntime, NamespaceStatus
+from mcp_portal.namespaces import (
+    NamespaceDebugPanel,
+    NamespaceProvider,
+    NamespaceRuntime,
+    NamespaceStatus,
+    iter_namespace_discovery_errors,
+)
 
 
 def create_debug_app(
     settings: Settings,
     namespace_runtimes: Sequence[NamespaceRuntime] = (),
-) -> FastMCPApp:
-    """Create the interactive FastMCP Apps debug provider.
+) -> NamespaceProvider:
+    """Create the debug tool server.
 
     Args:
         settings: Runtime settings shared by namespace servers.
         namespace_runtimes: Namespace manifests paired with their runtime contexts.
 
     Returns:
-        A FastMCP app provider with a dashboard UI and app-only backend tool.
+        A provider with dashboard and snapshot tools.
     """
-    app = FastMCPApp("MCP Portal Debug")
+    app = NamespaceProvider("MCP Portal Debug")
 
-    @app.tool()
+    @app.tool(
+        title="Debug Runtime Snapshot",
+        annotations=ToolAnnotations(
+            title="Debug Runtime Snapshot",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        meta={"tags": ["debug", "readonly", "closed-world"]},
+        structured_output=True,
+    )
     def debug_snapshot() -> str:
         """Return a formatted runtime snapshot for the debug UI.
 
@@ -56,26 +73,34 @@ def create_debug_app(
         """
         return _runtime_snapshot_text(settings, namespace_runtimes)
 
-    @app.ui(
-        name="portal_debug",
-        title="MCP Portal Debug",
-        description=(
-            "Open the MCP Portal debug dashboard. Use this in FastMCP Apps dev mode "
-            "to inspect runtime configuration and verify tool wiring."
+    @app.tool(
+        title="MCP Portal Debug Dashboard",
+        annotations=ToolAnnotations(
+            title="MCP Portal Debug Dashboard",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
         ),
-        tags={"debug", "ui"},
+        meta={"tags": ["debug", "readonly", "closed-world"]},
+        structured_output=True,
     )
-    def portal_debug() -> PrefabApp:
-        """Render the local development dashboard.
+    def portal_debug() -> dict[str, Any]:
+        """Return the local development dashboard payload.
 
         Returns:
-            A Prefab app containing runtime settings and namespace diagnostics.
+            A Prefab app payload containing runtime settings and namespace diagnostics.
         """
         snapshot = _runtime_snapshot(settings, namespace_runtimes)
-        openai_snapshot = snapshot["settings"]["openai"]
-        api_key_variant = "success" if openai_snapshot["has_api_key"] else "warning"
-        api_key_label = (
-            "API key configured" if openai_snapshot["has_api_key"] else "API key missing"
+        model_provider_snapshot = snapshot["settings"]["model_provider"]
+        provider_configured = bool(model_provider_snapshot["configured"])
+        provider_name = str(model_provider_snapshot["provider"])
+        provider_label = _model_provider_label(provider_name)
+        provider_status_variant = "success" if provider_configured else "warning"
+        provider_status_label = (
+            f"{provider_label} configured"
+            if provider_configured
+            else f"{provider_label} settings missing"
         )
 
         with Column(gap=4, css_class="max-w-5xl mx-auto") as view:
@@ -83,27 +108,30 @@ def create_debug_app(
                 with CardHeader():
                     with Row(gap=2, align="center", css_class="justify-between"):
                         CardTitle("MCP Portal Debug")
-                        Badge(api_key_label, variant=api_key_variant)
+                        Badge(provider_status_label, variant=provider_status_variant)
                     CardDescription("Runtime status for the local FastMCP development UI.")
 
-            with Grid(columns={"default": 1, "md": 3}, gap=3):
+            with Grid(columns={"default": 1, "md": 4}, gap=3):
+                with Card():
+                    with CardContent(css_class="p-4"):
+                        Metric(label="Model provider", value=provider_label)
                 with Card():
                     with CardContent(css_class="p-4"):
                         Metric(
                             label="Large model",
-                            value=str(openai_snapshot["large_language_model"]),
+                            value=str(model_provider_snapshot["large_language_model"]),
                         )
                 with Card():
                     with CardContent(css_class="p-4"):
                         Metric(
                             label="Small model",
-                            value=str(openai_snapshot["small_language_model"]),
+                            value=str(model_provider_snapshot["small_language_model"]),
                         )
                 with Card():
                     with CardContent(css_class="p-4"):
                         Metric(
                             label="Embedding model",
-                            value=str(openai_snapshot["embedding_model"]),
+                            value=str(model_provider_snapshot["embedding_model"]),
                         )
 
             Text("Namespaces", css_class="font-medium text-sm")
@@ -154,11 +182,12 @@ def create_debug_app(
                         ),
                     )
 
-        return PrefabApp(
+        dashboard = PrefabApp(
             title="MCP Portal Debug",
             view=view,
             state={"snapshot_text": _runtime_snapshot_text(settings, namespace_runtimes)},
         )
+        return dashboard.model_dump(mode="json", by_alias=True, exclude_none=True)
 
     return app
 
@@ -179,7 +208,8 @@ def _runtime_snapshot(
     return {
         "settings": settings.public_snapshot(),
         "namespaces": [_namespace_snapshot(runtime) for runtime in namespace_runtimes],
-        "dev_command": "fastmcp dev apps src/mcp_portal/server.py",
+        "namespace_discovery_errors": iter_namespace_discovery_errors(),
+        "dev_command": "mcp-portal --transport streamable-http --port 8000",
     }
 
 
@@ -336,3 +366,17 @@ def _status_variant(state: str) -> str:
     if state == "disabled":
         return "secondary"
     return "destructive"
+
+
+def _model_provider_label(provider: str) -> str:
+    """Return a readable label for a configured model provider.
+
+    Args:
+        provider: Provider identifier from runtime settings.
+
+    Returns:
+        Human-readable provider label.
+    """
+    if provider == "azure_openai":
+        return "Azure OpenAI"
+    return "OpenAI"
