@@ -275,6 +275,8 @@ factory and decorate it with the namespace manifest:
 
 ```python
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+from pydantic import BaseModel
 
 from mcp_portal.namespaces import (
     NamespaceContext,
@@ -282,6 +284,12 @@ from mcp_portal.namespaces import (
     NamespaceStatus,
     register_namespace,
 )
+
+
+class GreetingResult(BaseModel):
+    """Structured greeting returned to MCP clients."""
+
+    message: str
 
 
 def example_status(context: NamespaceContext) -> NamespaceStatus:
@@ -320,24 +328,38 @@ def create_server(context: NamespaceContext) -> FastMCP:
     """
     server = FastMCP("Example")
 
-    @server.tool(meta={"tags": ["example", "readonly"]})
-    def hello(name: str) -> str:
+    @server.tool(
+        title="Greet User",
+        annotations=ToolAnnotations(
+            title="Greet User",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        meta={"tags": ["example", "readonly"]},
+        structured_output=True,
+    )
+    def hello(name: str) -> GreetingResult:
         """Greet a user by name.
 
         Args:
             name: Name to greet.
 
         Returns:
-            A friendly greeting.
+            A structured friendly greeting.
         """
         context.logger.debug("Example greeting requested")
-        return f"Hello, {name}!"
+        return GreetingResult(message=f"Hello, {name}!")
 
     return server
 ```
 
 FastMCP mounts the namespace with a prefix, so `hello` becomes `example_hello`.
 Namespace modules are discovered automatically; adding the decorated module is enough.
+Use MCP `ToolAnnotations` for client-visible behavior and Pydantic response models for
+stable `outputSchema` and `structuredContent`. Keep `_meta.tags` only as portal policy
+metadata; tags are not a substitute for standard MCP semantics.
 
 Each namespace receives a `NamespaceContext` with shared settings, a namespace-scoped
 logger, a redactor for safe diagnostics, a clock, and lazy external client factories.

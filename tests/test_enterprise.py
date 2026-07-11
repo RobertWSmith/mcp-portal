@@ -8,6 +8,7 @@ from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from starlette.testclient import TestClient
 
 from mcp_portal.audit import MemoryAuditSink, audit_event, digest_arguments
@@ -376,6 +377,31 @@ def test_governed_provider_mounts_tools_resources_and_prompts() -> None:
     assert tool.meta["owner"] == "platform-engineering"
     assert "portal://runtime/config" in server._resource_manager._resources
     assert "health_diagnose" in server._prompt_manager._prompts
+
+
+def test_governed_tool_merges_explicit_and_inferred_semantics() -> None:
+    """Verify explicit annotations win while missing standard hints are inferred."""
+    child = FastMCP("Example")
+
+    @child.tool(
+        annotations=ToolAnnotations(readOnlyHint=False),
+        meta={"tags": ["idempotent", "external"]},
+    )
+    def update_record() -> dict[str, bool]:
+        """Return a placeholder update result."""
+        return {"updated": True}
+
+    server = create_mcp(create_test_settings(), namespaces=(), include_debug_ui=False)
+    server.mount(child, namespace="example")
+    tool = server._tool_manager.get_tool("example_update_record")
+
+    assert tool is not None
+    assert tool.title == "Example Update Record"
+    assert tool.annotations is not None
+    assert tool.annotations.readOnlyHint is False
+    assert tool.annotations.idempotentHint is True
+    assert tool.annotations.openWorldHint is True
+    assert tool.annotations.destructiveHint is None
 
 
 def test_namespace_allowlist_controls_provider_admission() -> None:

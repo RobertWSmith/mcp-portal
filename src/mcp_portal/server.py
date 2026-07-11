@@ -25,7 +25,7 @@ if __package__ in {None, ""}:
 from mcp.server.auth.settings import AuthSettings as SdkAuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.tools import Tool
-from mcp.types import ToolAnnotations
+from mcp.types import ToolAnnotations, ToolExecution
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -100,6 +100,10 @@ class PortalFastMCP(FastMCP):
             tool = self._tool_manager.get_tool(exposed_tool.name)
             if tool is None:
                 continue
+            task_support = (tool.meta or {}).get("task_support", "forbidden")
+            exposed_tool = exposed_tool.model_copy(
+                update={"execution": ToolExecution(taskSupport=task_support)}
+            )
             invocation = new_invocation(
                 exposed_tool.name,
                 self.portal_settings.enterprise.tenant_claim,
@@ -418,12 +422,18 @@ def _governed_tool(tool: Tool, name: str, namespace: Namespace | str | None) -> 
     """
     meta = dict(tool.meta or {})
     tags = frozenset(meta.get("tags", ()))
-    annotations = tool.annotations or ToolAnnotations(
-        readOnlyHint="readonly" in tags,
-        destructiveHint="destructive" in tags,
-        idempotentHint="idempotent" in tags or "readonly" in tags,
-        openWorldHint="external" in tags,
+    inferred_annotations = ToolAnnotations(
+        title=tool.title,
+        readOnlyHint=True if "readonly" in tags else None,
+        destructiveHint=(True if "destructive" in tags else False if "readonly" in tags else None),
+        idempotentHint=True if tags & {"idempotent", "readonly"} else None,
+        openWorldHint=(True if "external" in tags else False if "closed-world" in tags else None),
     )
+    annotation_payload = inferred_annotations.model_dump(exclude_none=True)
+    if tool.annotations is not None:
+        annotation_payload.update(tool.annotations.model_dump(exclude_none=True))
+    annotations = ToolAnnotations.model_validate(annotation_payload)
+    title = tool.title or annotations.title or name.replace("_", " ").title()
     if isinstance(namespace, Namespace):
         meta.update(
             {
@@ -435,7 +445,9 @@ def _governed_tool(tool: Tool, name: str, namespace: Namespace | str | None) -> 
                 "required_scopes": sorted(namespace.required_scopes),
             }
         )
-    return tool.model_copy(update={"name": name, "annotations": annotations, "meta": meta})
+    return tool.model_copy(
+        update={"name": name, "title": title, "annotations": annotations, "meta": meta}
+    )
 
 
 def _copy_provider_components(

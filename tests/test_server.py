@@ -44,6 +44,43 @@ async def test_default_namespaces_are_mounted(client: Client) -> None:
     assert {"health_ping", "health_runtime_config"} <= tool_names
 
 
+async def test_health_tools_publish_standard_mcp_semantics(client: Client) -> None:
+    """Verify health tools expose titles, annotations, execution, and output schemas."""
+    tools = {tool.name: tool for tool in await client.list_tools()}
+    ping = tools["health_ping"]
+    runtime_config = tools["health_runtime_config"]
+
+    assert ping.title == "Portal Health Check"
+    assert ping.annotations is not None
+    assert ping.annotations.model_dump(exclude_none=True) == {
+        "title": "Portal Health Check",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    assert ping.execution is not None
+    assert ping.execution.taskSupport == "forbidden"
+    assert ping.outputSchema["properties"]["status"]["const"] == "ok"
+    assert runtime_config.title == "Public Runtime Configuration"
+    assert set(runtime_config.outputSchema["required"]) == {
+        "auth",
+        "authorization",
+        "azure_identity",
+        "azure_openai",
+        "database",
+        "enterprise",
+        "health",
+        "http",
+        "middleware",
+        "model_provider",
+        "mongodb",
+        "namespace_discovery",
+        "observability",
+        "openai",
+    }
+
+
 async def test_debug_ui_tool_is_exposed(client: Client) -> None:
     """Verify the FastMCP Apps debug dashboard is available to dev tools."""
     tools = await client.list_tools()
@@ -197,14 +234,16 @@ async def test_health_ping(client: Client) -> None:
     """Verify the health ping tool returns a simple liveness response."""
     result = await client.call_tool("health_ping", {})
 
-    assert result.content[0].text == "pong"
+    assert result.structured_content == {"status": "ok", "message": "pong"}
 
 
 async def test_runtime_config_does_not_expose_secret(client: Client) -> None:
     """Verify public runtime config omits raw secret values."""
     result = await client.call_tool("health_runtime_config", {})
+    data = result.structured_content
+    assert data is not None
 
-    assert result.data["model_provider"] == {
+    assert data["model_provider"] == {
         "provider": "openai",
         "configured": True,
         "auth_mode": "api_key",
@@ -212,13 +251,13 @@ async def test_runtime_config_does_not_expose_secret(client: Client) -> None:
         "small_language_model": "small-model",
         "embedding_model": "embedding-model",
     }
-    assert result.data["openai"] == {
+    assert data["openai"] == {
         "has_api_key": True,
         "large_language_model": "large-model",
         "small_language_model": "small-model",
         "embedding_model": "embedding-model",
     }
-    assert result.data["azure_openai"] == {
+    assert data["azure_openai"] == {
         "auth_mode": "azure_identity",
         "configured": False,
         "endpoint_configured": False,
@@ -230,15 +269,15 @@ async def test_runtime_config_does_not_expose_secret(client: Client) -> None:
         "small_language_model_deployment": None,
         "embedding_model_deployment": None,
     }
-    assert result.data["azure_identity"] == {
+    assert data["azure_identity"] == {
         "service_principal_configured": False,
         "tenant_id_configured": False,
         "client_id_configured": False,
         "client_secret_configured": False,
     }
-    assert result.data["health"] == {"enabled": True}
-    assert result.data["auth"]["enabled"] is False
-    assert result.data["database"] == {
+    assert data["health"] == {"enabled": True}
+    assert data["auth"]["enabled"] is False
+    assert data["database"] == {
         "provider": "oracle",
         "oracle_preferred": True,
         "sqlalchemy_enforced": True,
@@ -250,7 +289,7 @@ async def test_runtime_config_does_not_expose_secret(client: Client) -> None:
         "oracle_pool_min": 1,
         "oracle_pool_max": 4,
     }
-    assert result.data["mongodb"] == {
+    assert data["mongodb"] == {
         "configured": False,
         "connection_string_configured": False,
         "database_configured": False,
@@ -263,8 +302,8 @@ async def test_runtime_config_does_not_expose_secret(client: Client) -> None:
         "vector_search_configured": False,
         "vector_search_index": "vector_index",
     }
-    assert result.data["authorization"]["tag_scopes"]["write"] == ["write"]
-    assert result.data != {
+    assert data["authorization"]["tag_scopes"]["write"] == ["write"]
+    assert data != {
         "openai": {
             "has_api_key": True,
             "large_language_model": "large-model",

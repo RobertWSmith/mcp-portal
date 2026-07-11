@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from prefab_ui.actions import CallTool, SetState
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
@@ -52,7 +53,18 @@ def create_debug_app(
     """
     app = FastMCP("MCP Portal Debug")
 
-    @app.tool()
+    @app.tool(
+        title="Debug Runtime Snapshot",
+        annotations=ToolAnnotations(
+            title="Debug Runtime Snapshot",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        meta={"tags": ["debug", "readonly", "closed-world"]},
+        structured_output=True,
+    )
     def debug_snapshot() -> str:
         """Return a formatted runtime snapshot for the debug UI.
 
@@ -61,7 +73,18 @@ def create_debug_app(
         """
         return _runtime_snapshot_text(settings, namespace_runtimes)
 
-    @app.tool()
+    @app.tool(
+        title="MCP Portal Debug Dashboard",
+        annotations=ToolAnnotations(
+            title="MCP Portal Debug Dashboard",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        meta={"tags": ["debug", "readonly", "closed-world"]},
+        structured_output=True,
+    )
     def portal_debug() -> dict[str, Any]:
         """Return the local development dashboard payload.
 
