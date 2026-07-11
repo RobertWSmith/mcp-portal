@@ -94,6 +94,13 @@ Remote HTTP deployments should set `MCP_PORTAL_AUTH_PROVIDER=jwt` with either
 tokens are available through `MCP_PORTAL_AUTH_PROVIDER=static`, but they are intended
 only for local smoke tests.
 
+Enterprise deployments can instead use `MCP_PORTAL_AUTH_PROVIDER=ldap`, `kerberos`, or
+`ldap+kerberos`. LDAP accepts HTTP Basic credentials and requires HTTPS plus an encrypted
+LDAPS/StartTLS directory connection. Kerberos accepts HTTP Negotiate tickets for a configured
+service principal. Install `.[ldap]`, `.[kerberos]`, or `.[enterprise-auth]` before enabling
+those providers; the full settings and examples are in
+[docs/environment-variables.md](docs/environment-variables.md).
+
 Tag metadata can be attached to SDK tools through `_meta`. Keep using `readonly`,
 `write`, `admin`, `external`, and `destructive` tags on namespace tools so access
 policy can stay centralized.

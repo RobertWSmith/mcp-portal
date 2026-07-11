@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 from dataclasses import replace
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import mcp_portal.clients as clients_module
+import mcp_portal.auth as auth_module
 import mcp_portal.namespaces as namespace_registry
 from mcp_portal.asgi import create_app
 from mcp_portal.auth import create_auth_provider, create_authorization_checks
@@ -66,6 +68,200 @@ def test_jwt_auth_provider_accepts_symmetric_key_configuration() -> None:
     )
 
     assert create_auth_provider(settings) is not None
+
+
+def test_ldap_auth_provider_requires_encrypted_directory_connection(monkeypatch) -> None:
+    """Verify cleartext LDAP credentials are rejected unless StartTLS is enabled."""
+    monkeypatch.setattr(auth_module, "_require_optional_dependency", lambda *_: None)
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(
+            provider="ldap",
+            ldap_uri="ldap://directory.example",
+            ldap_user_dn_template="uid={username},dc=example,dc=com",
+        ),
+    )
+
+    with pytest.raises(ConfigurationPortalError, match="requires LDAPS"):
+        create_auth_provider(settings)
+
+
+async def test_ldap_auth_provider_verifies_basic_credentials(monkeypatch) -> None:
+    """Verify LDAP credentials are decoded, bound, and mapped to configured scopes."""
+    monkeypatch.setattr(auth_module, "_require_optional_dependency", lambda *_: None)
+    monkeypatch.setattr(
+        auth_module,
+        "_verify_ldap_credentials",
+        lambda settings, username, password: username == "alice" and password == "secret",
+    )
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(
+            provider="ldap",
+            ldap_uri="ldaps://directory.example",
+            ldap_user_dn_template="uid={username},dc=example,dc=com",
+            ldap_scopes=("portal", "write"),
+        ),
+    )
+    provider = create_auth_provider(settings)
+    assert provider is not None
+    credentials = base64.b64encode(b"alice:secret").decode()
+
+    access_token = await provider.verify_token(f"ldap:{credentials}")
+
+    assert access_token is not None
+    assert access_token.subject == "alice"
+    assert access_token.scopes == ["portal", "write"]
+    assert access_token.claims["auth_method"] == "ldap"
+
+
+async def test_combined_auth_provider_accepts_kerberos_ticket(monkeypatch) -> None:
+    """Verify combined mode accepts Kerberos tickets and maps the principal."""
+    monkeypatch.setattr(auth_module, "_require_optional_dependency", lambda *_: None)
+    monkeypatch.setattr(
+        auth_module,
+        "_verify_kerberos_ticket",
+        lambda settings, ticket: ("alice@EXAMPLE.COM", b"server-token"),
+    )
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(
+            provider="ldap_kerberos",
+            ldap_uri="ldaps://directory.example",
+            ldap_base_dn="dc=example,dc=com",
+            kerberos_hostname="portal.example.com",
+            kerberos_scopes=("portal",),
+        ),
+    )
+    provider = create_auth_provider(settings)
+    assert provider is not None
+    ticket = base64.b64encode(b"service-ticket").decode()
+
+    access_token = await provider.verify_token(f"kerberos:{ticket}")
+
+    assert access_token is not None
+    assert access_token.subject == "alice@EXAMPLE.COM"
+    assert access_token.scopes == ["portal"]
+    assert access_token.claims["auth_method"] == "kerberos"
+
+
+@pytest.mark.parametrize(
+    ("auth", "message"),
+    [
+        (AuthSettings(provider="ldap"), "requires MCP_PORTAL_AUTH_LDAP_URI"),
+        (
+            AuthSettings(provider="ldap", ldap_uri="ldaps://directory.example"),
+            "requires MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE",
+        ),
+        (
+            AuthSettings(
+                provider="ldap",
+                ldap_uri="ldaps://directory.example",
+                ldap_user_dn_template="uid=alice,dc=example,dc=com",
+            ),
+            "must contain {username}",
+        ),
+        (
+            AuthSettings(
+                provider="ldap",
+                ldap_uri="ldaps://directory.example",
+                ldap_base_dn="dc=example,dc=com",
+                ldap_search_filter="(uid=alice)",
+            ),
+            "SEARCH_FILTER must contain {username}",
+        ),
+        (
+            AuthSettings(
+                provider="ldap",
+                ldap_uri="ldaps://directory.example",
+                ldap_base_dn="dc=example,dc=com",
+                ldap_bind_dn="cn=portal,dc=example,dc=com",
+            ),
+            "must be configured together",
+        ),
+        (AuthSettings(provider="kerberos"), "requires MCP_PORTAL_AUTH_KERBEROS_HOSTNAME"),
+    ],
+)
+def test_enterprise_auth_rejects_incomplete_configuration(
+    monkeypatch, auth: AuthSettings, message: str
+) -> None:
+    """Verify incomplete enterprise provider settings fail at startup."""
+    monkeypatch.setattr(auth_module, "_require_optional_dependency", lambda *_: None)
+
+    with pytest.raises(ConfigurationPortalError, match=message):
+        create_auth_provider(replace(create_test_settings(), auth=auth))
+
+
+async def test_enterprise_provider_rejects_malformed_and_failed_credentials(monkeypatch) -> None:
+    """Verify malformed tokens and failed backend verification are rejected."""
+    monkeypatch.setattr(auth_module, "_require_optional_dependency", lambda *_: None)
+    monkeypatch.setattr(auth_module, "_verify_ldap_credentials", lambda *_: False)
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(
+            provider="ldap_kerberos",
+            ldap_uri="ldaps://directory.example",
+            ldap_base_dn="dc=example,dc=com",
+            kerberos_hostname="portal.example.com",
+        ),
+    )
+    provider = create_auth_provider(settings)
+    assert provider is not None
+
+    assert await provider.verify_token("missing-scheme") is None
+    assert await provider.verify_token("ldap:not-base64") is None
+    assert await provider.verify_token(f"ldap:{base64.b64encode(b'alice:bad').decode()}") is None
+    assert await provider.verify_token("unknown:value") is None
+    assert await provider.verify_token("kerberos:not-base64") is None
+
+
+async def test_enterprise_scheme_middleware_translates_and_challenges() -> None:
+    """Verify standard Basic/Negotiate headers and mutual-auth challenges are adapted."""
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(provider="ldap_kerberos"),
+    )
+    provider = auth_module.EnterpriseAuthProvider(settings)
+    captured_scopes: list[dict] = []
+
+    async def app(scope, receive, send) -> None:
+        captured_scopes.append(scope)
+        if b"ldap:" in dict(scope.get("headers", ())).get(b"authorization", b""):
+            auth_module._kerberos_response_token.set(b"server-token")
+        await send({"type": "http.response.start", "status": 401, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    middleware = auth_module.EnterpriseAuthSchemeMiddleware(app, provider)
+
+    async def receive() -> dict:
+        return {"type": "http.request"}
+
+    responses: list[dict] = []
+
+    async def send(message: dict) -> None:
+        responses.append(message)
+
+    await middleware(
+        {"type": "http", "headers": [(b"authorization", b"Basic credentials")]},
+        receive,
+        send,
+    )
+    response_headers = responses[0]["headers"]
+    assert dict(captured_scopes[0]["headers"])[b"authorization"] == b"Bearer ldap:credentials"
+    assert (b"www-authenticate", b"Negotiate c2VydmVyLXRva2Vu") in response_headers
+    assert (b"www-authenticate", b'Basic realm="mcp-portal"') in response_headers
+
+    responses.clear()
+    await middleware(
+        {"type": "http", "headers": [(b"x-test", b"1"), (b"authorization", b"Negotiate ticket")]},
+        receive,
+        send,
+    )
+    assert dict(captured_scopes[1]["headers"])[b"authorization"] == b"Bearer kerberos:ticket"
+    assert (b"www-authenticate", b"Negotiate") in responses[0]["headers"]
+
+    await middleware({"type": "websocket"}, receive, send)
+    assert captured_scopes[2]["type"] == "websocket"
 
 
 def test_sdk_auth_settings_normalize_portal_configuration() -> None:

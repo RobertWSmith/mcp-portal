@@ -82,7 +82,7 @@ production transports.
 
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
-| `MCP_PORTAL_AUTH_PROVIDER` | `none` | No | Authentication provider. Accepted values are `none`, `static`, and `jwt`; unsupported values fall back to `none`. |
+| `MCP_PORTAL_AUTH_PROVIDER` | `none` | No | Authentication provider. Accepted values are `none`, `static`, `jwt`, `ldap`, `kerberos`, and `ldap+kerberos`; unsupported values fall back to `none`. |
 | `MCP_PORTAL_AUTH_REQUIRED_SCOPES` | unset | No | Scopes required on every accepted bearer token. Accepts comma-separated or space-separated values. |
 | `MCP_PORTAL_AUTH_STATIC_TOKEN` | unset | When provider is `static` | Static bearer token for local smoke tests. Static auth is not recommended for remote production deployments. |
 | `MCP_PORTAL_AUTH_STATIC_CLIENT_ID` | `mcp-portal-static` | No | Client id attached to the static token. |
@@ -92,9 +92,53 @@ production transports.
 | `MCP_PORTAL_AUTH_JWT_ISSUER` | unset | No | Optional expected JWT issuer. |
 | `MCP_PORTAL_AUTH_JWT_AUDIENCE` | unset | No | Optional expected JWT audience. |
 | `MCP_PORTAL_AUTH_JWT_ALGORITHM` | `RS256` | No | JWT signing algorithm to accept. |
+| `MCP_PORTAL_AUTH_LDAP_URI` | unset | When LDAP is enabled | Directory URI. Must use `ldaps://`, or `ldap://` together with StartTLS. |
+| `MCP_PORTAL_AUTH_LDAP_BASE_DN` | unset | When LDAP search mode is used | Base DN beneath which the username is searched. |
+| `MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE` | unset | Alternative to base-DN search | Direct bind DN template containing `{username}`, for example `uid={username},ou=people,dc=example,dc=com`. |
+| `MCP_PORTAL_AUTH_LDAP_SEARCH_FILTER` | `(uid={username})` | No | Search filter used in base-DN search mode. It must contain `{username}`; the supplied username is RFC 4515 escaped. |
+| `MCP_PORTAL_AUTH_LDAP_BIND_DN` | unset | No | Service-account DN used to find a user's DN. Configure it together with the bind password; omit both for anonymous search. |
+| `MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD` | unset | With bind DN | Service-account password. Omitted from public settings snapshots. |
+| `MCP_PORTAL_AUTH_LDAP_START_TLS` | `false` | With an `ldap://` URI | Upgrades the directory connection with StartTLS before any bind. |
+| `MCP_PORTAL_AUTH_LDAP_CA_CERT_FILE` | system trust store | No | Optional CA bundle for LDAPS or StartTLS certificate validation. Certificate verification is always required. |
+| `MCP_PORTAL_AUTH_LDAP_CONNECT_TIMEOUT` | `5` | No | Directory connection, receive, and search timeout in seconds. |
+| `MCP_PORTAL_AUTH_LDAP_SCOPES` | required scopes | No | Scopes granted to successfully authenticated LDAP users. |
+| `MCP_PORTAL_AUTH_KERBEROS_HOSTNAME` | unset | When Kerberos is enabled | Hostname portion of the HTTP service principal, such as `portal.example.com`. |
+| `MCP_PORTAL_AUTH_KERBEROS_SERVICE` | `HTTP` | No | Service portion of the Kerberos service principal. |
+| `MCP_PORTAL_AUTH_KERBEROS_KEYTAB` | platform credentials | No | Optional acceptor keytab. When set, MCP Portal initializes `KRB5_KTNAME` only if the process has not already set it. |
+| `MCP_PORTAL_AUTH_KERBEROS_SCOPES` | required scopes | No | Scopes granted to successfully authenticated Kerberos principals. |
 
 For remote HTTP deployments, prefer `MCP_PORTAL_AUTH_PROVIDER=jwt` with a JWKS URI or
 public key. The static provider exists mainly for local smoke tests.
+
+LDAP accepts standard HTTP Basic credentials and validates them with a directory bind.
+Kerberos accepts standard HTTP `Negotiate` service tickets and deliberately requests the
+Kerberos protocol rather than allowing NTLM fallback. When both are needed, set
+`MCP_PORTAL_AUTH_PROVIDER=ldap+kerberos`; a request succeeds through either configured
+mechanism. Serve the portal itself over HTTPS whenever Basic authentication is enabled.
+
+Install the matching optional dependency before enabling a provider:
+
+```powershell
+python -m pip install -e ".[ldap]"
+python -m pip install -e ".[kerberos]"
+# Or install both:
+python -m pip install -e ".[enterprise-auth]"
+```
+
+Example using an LDAP search account and a Kerberos keytab:
+
+```dotenv
+MCP_PORTAL_AUTH_PROVIDER=ldap+kerberos
+MCP_PORTAL_AUTH_REQUIRED_SCOPES=portal
+MCP_PORTAL_AUTH_LDAP_URI=ldaps://directory.example.com:636
+MCP_PORTAL_AUTH_LDAP_BASE_DN=ou=people,dc=example,dc=com
+MCP_PORTAL_AUTH_LDAP_SEARCH_FILTER=(uid={username})
+MCP_PORTAL_AUTH_LDAP_BIND_DN=cn=mcp-portal,ou=services,dc=example,dc=com
+MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD=change-me
+MCP_PORTAL_AUTH_KERBEROS_HOSTNAME=portal.example.com
+MCP_PORTAL_AUTH_KERBEROS_SERVICE=HTTP
+MCP_PORTAL_AUTH_KERBEROS_KEYTAB=/run/secrets/mcp-portal.keytab
+```
 
 ## Authorization Settings
 
@@ -233,6 +277,6 @@ FastMCP emits OpenTelemetry spans when launched with an OpenTelemetry SDK or
 ## Secret Handling
 
 Secret-bearing values such as `OPENAI_API_KEY`, `AZURE_CLIENT_SECRET`, static bearer
-tokens, JWT keys, database URLs, Oracle passwords, and MongoDB connection strings are
+tokens, JWT keys, LDAP bind passwords, database URLs, Oracle passwords, and MongoDB connection strings are
 omitted from public settings snapshots. Status tools expose only whether those values
 are configured.

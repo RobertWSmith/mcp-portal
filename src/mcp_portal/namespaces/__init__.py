@@ -251,6 +251,7 @@ def build_namespace_runtimes(
             settings.azure_identity.client_secret,
             settings.auth.static_token,
             settings.auth.jwt_public_key,
+            settings.auth.ldap_bind_password,
             settings.database.sqlalchemy_url,
             settings.database.oracle_password,
             settings.mongodb.connection_string,

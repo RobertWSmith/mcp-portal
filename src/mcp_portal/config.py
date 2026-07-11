@@ -9,7 +9,7 @@ from typing import Literal
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-AuthProviderName = Literal["none", "static", "jwt"]
+AuthProviderName = Literal["none", "static", "jwt", "ldap", "kerberos", "ldap_kerberos"]
 DatabaseProviderName = Literal["none", "oracle", "sqlalchemy"]
 ModelProviderName = Literal["openai", "azure_openai"]
 MongoDBCollectionName = Literal[
@@ -209,6 +209,20 @@ class AuthSettings:
         jwt_issuer: Optional expected JWT issuer.
         jwt_audience: Optional expected JWT audience.
         jwt_algorithm: JWT signing algorithm to accept.
+        ldap_uri: LDAP or LDAPS server URI.
+        ldap_base_dn: Directory search base used to resolve usernames.
+        ldap_user_dn_template: Optional direct user DN template containing ``{username}``.
+        ldap_search_filter: LDAP search filter containing ``{username}``.
+        ldap_bind_dn: Optional service-account DN used for directory searches.
+        ldap_bind_password: Optional service-account password used for directory searches.
+        ldap_start_tls: Whether to upgrade an LDAP connection with StartTLS.
+        ldap_ca_cert_file: Optional CA bundle used to verify the directory certificate.
+        ldap_connect_timeout: LDAP network and operation timeout in seconds.
+        ldap_scopes: Scopes granted to LDAP-authenticated principals.
+        kerberos_hostname: Hostname portion of the HTTP service principal.
+        kerberos_service: Service portion of the HTTP service principal.
+        kerberos_keytab: Optional keytab path used by the Kerberos acceptor.
+        kerberos_scopes: Scopes granted to Kerberos-authenticated principals.
     """
 
     provider: AuthProviderName = "none"
@@ -221,6 +235,20 @@ class AuthSettings:
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
     jwt_algorithm: str = "RS256"
+    ldap_uri: str | None = None
+    ldap_base_dn: str | None = None
+    ldap_user_dn_template: str | None = None
+    ldap_search_filter: str = "(uid={username})"
+    ldap_bind_dn: str | None = None
+    ldap_bind_password: str | None = None
+    ldap_start_tls: bool = False
+    ldap_ca_cert_file: str | None = None
+    ldap_connect_timeout: float = 5.0
+    ldap_scopes: tuple[str, ...] = ()
+    kerberos_hostname: str | None = None
+    kerberos_service: str = "HTTP"
+    kerberos_keytab: str | None = None
+    kerberos_scopes: tuple[str, ...] = ()
 
     @property
     def enabled(self) -> bool:
@@ -248,6 +276,18 @@ class AuthSettings:
             "jwt_issuer_configured": self.jwt_issuer is not None,
             "jwt_audience_configured": self.jwt_audience is not None,
             "jwt_algorithm": self.jwt_algorithm,
+            "ldap_uri_configured": self.ldap_uri is not None,
+            "ldap_base_dn_configured": self.ldap_base_dn is not None,
+            "ldap_user_dn_template_configured": self.ldap_user_dn_template is not None,
+            "ldap_bind_dn_configured": self.ldap_bind_dn is not None,
+            "ldap_bind_password_configured": self.ldap_bind_password is not None,
+            "ldap_start_tls": self.ldap_start_tls,
+            "ldap_ca_cert_file_configured": self.ldap_ca_cert_file is not None,
+            "ldap_scopes": list(self.ldap_scopes),
+            "kerberos_hostname_configured": self.kerberos_hostname is not None,
+            "kerberos_service": self.kerberos_service,
+            "kerberos_keytab_configured": self.kerberos_keytab is not None,
+            "kerberos_scopes": list(self.kerberos_scopes),
         }
 
 
@@ -632,6 +672,24 @@ class Settings:
                 jwt_issuer=_optional_env("MCP_PORTAL_AUTH_JWT_ISSUER"),
                 jwt_audience=_optional_env("MCP_PORTAL_AUTH_JWT_AUDIENCE"),
                 jwt_algorithm=os.getenv("MCP_PORTAL_AUTH_JWT_ALGORITHM", "RS256"),
+                ldap_uri=_optional_env("MCP_PORTAL_AUTH_LDAP_URI"),
+                ldap_base_dn=_optional_env("MCP_PORTAL_AUTH_LDAP_BASE_DN"),
+                ldap_user_dn_template=_optional_env("MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE"),
+                ldap_search_filter=(
+                    _optional_env("MCP_PORTAL_AUTH_LDAP_SEARCH_FILTER") or "(uid={username})"
+                ),
+                ldap_bind_dn=_optional_env("MCP_PORTAL_AUTH_LDAP_BIND_DN"),
+                ldap_bind_password=_optional_env("MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD"),
+                ldap_start_tls=_bool_env("MCP_PORTAL_AUTH_LDAP_START_TLS", default=False),
+                ldap_ca_cert_file=_optional_env("MCP_PORTAL_AUTH_LDAP_CA_CERT_FILE"),
+                ldap_connect_timeout=_float_env(
+                    "MCP_PORTAL_AUTH_LDAP_CONNECT_TIMEOUT", default=5.0
+                ),
+                ldap_scopes=_csv_env("MCP_PORTAL_AUTH_LDAP_SCOPES"),
+                kerberos_hostname=_optional_env("MCP_PORTAL_AUTH_KERBEROS_HOSTNAME"),
+                kerberos_service=(_optional_env("MCP_PORTAL_AUTH_KERBEROS_SERVICE") or "HTTP"),
+                kerberos_keytab=_optional_env("MCP_PORTAL_AUTH_KERBEROS_KEYTAB"),
+                kerberos_scopes=_csv_env("MCP_PORTAL_AUTH_KERBEROS_SCOPES"),
             ),
             authorization=AuthorizationSettings(
                 tag_scopes=_tag_scope_env(
@@ -970,7 +1028,9 @@ def _auth_provider_env(name: str, *, default: AuthProviderName) -> AuthProviderN
         A supported authentication provider name.
     """
     value = (_optional_env(name) or default).lower()
-    if value in {"none", "static", "jwt"}:
+    if value in {"ldap+kerberos", "kerberos+ldap"}:
+        return "ldap_kerberos"
+    if value in {"none", "static", "jwt", "ldap", "kerberos", "ldap_kerberos"}:
         return value
     return default
 

@@ -118,6 +118,9 @@ def create_namespace_test_context(
             (
                 selected_settings.openai.api_key,
                 selected_settings.azure_identity.client_secret,
+                selected_settings.auth.static_token,
+                selected_settings.auth.jwt_public_key,
+                selected_settings.auth.ldap_bind_password,
                 selected_settings.mongodb.connection_string,
             )
         ),

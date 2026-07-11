@@ -23,7 +23,11 @@ from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from mcp_portal.auth import create_auth_provider
+from mcp_portal.auth import (
+    EnterpriseAuthProvider,
+    EnterpriseAuthSchemeMiddleware,
+    create_auth_provider,
+)
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
 from mcp_portal.debug_ui import create_debug_app
@@ -78,6 +82,17 @@ class PortalFastMCP(FastMCP):
             stateless=stateless_http,
         )
         return self.streamable_http_app()
+
+    def streamable_http_app(self) -> Any:
+        """Build the HTTP app and enable LDAP/Kerberos header schemes when selected.
+
+        Returns:
+            Streamable HTTP ASGI application with any required scheme adapter.
+        """
+        app = super().streamable_http_app()
+        if isinstance(self._token_verifier, EnterpriseAuthProvider):
+            return EnterpriseAuthSchemeMiddleware(app, self._token_verifier)
+        return app
 
     def run(
         self,

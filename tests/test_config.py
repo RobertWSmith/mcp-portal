@@ -33,6 +33,20 @@ PORTAL_ENV_NAMES = (
     "MCP_PORTAL_AUTH_JWT_ISSUER",
     "MCP_PORTAL_AUTH_JWT_AUDIENCE",
     "MCP_PORTAL_AUTH_JWT_ALGORITHM",
+    "MCP_PORTAL_AUTH_LDAP_URI",
+    "MCP_PORTAL_AUTH_LDAP_BASE_DN",
+    "MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE",
+    "MCP_PORTAL_AUTH_LDAP_SEARCH_FILTER",
+    "MCP_PORTAL_AUTH_LDAP_BIND_DN",
+    "MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD",
+    "MCP_PORTAL_AUTH_LDAP_START_TLS",
+    "MCP_PORTAL_AUTH_LDAP_CA_CERT_FILE",
+    "MCP_PORTAL_AUTH_LDAP_CONNECT_TIMEOUT",
+    "MCP_PORTAL_AUTH_LDAP_SCOPES",
+    "MCP_PORTAL_AUTH_KERBEROS_HOSTNAME",
+    "MCP_PORTAL_AUTH_KERBEROS_SERVICE",
+    "MCP_PORTAL_AUTH_KERBEROS_KEYTAB",
+    "MCP_PORTAL_AUTH_KERBEROS_SCOPES",
     "MCP_PORTAL_AUTHZ_TAG_SCOPES",
     "MCP_PORTAL_MIDDLEWARE_ENABLED",
     "MCP_PORTAL_STRUCTURED_LOGGING",
@@ -248,6 +262,42 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
     assert settings.mongodb.vector_search_configured is True
     assert settings.observability.enabled is True
     assert settings.observability.service_name == "portal-prod"
+
+
+def test_settings_load_combined_ldap_and_kerberos_auth(tmp_path: Path) -> None:
+    """Verify both enterprise providers can be enabled from one auth setting."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "MCP_PORTAL_AUTH_PROVIDER=ldap+kerberos",
+                "MCP_PORTAL_AUTH_LDAP_URI=ldaps://directory.example:636",
+                "MCP_PORTAL_AUTH_LDAP_BASE_DN=dc=example,dc=com",
+                "MCP_PORTAL_AUTH_LDAP_BIND_DN=cn=portal,dc=example,dc=com",
+                "MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD=directory-secret",
+                "MCP_PORTAL_AUTH_LDAP_SCOPES=portal,write",
+                "MCP_PORTAL_AUTH_KERBEROS_HOSTNAME=portal.example.com",
+                "MCP_PORTAL_AUTH_KERBEROS_SERVICE=HTTP",
+                "MCP_PORTAL_AUTH_KERBEROS_KEYTAB=/run/secrets/portal.keytab",
+                "MCP_PORTAL_AUTH_KERBEROS_SCOPES=portal admin",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings.from_env(env_file, override=True)
+
+    assert settings.auth.provider == "ldap_kerberos"
+    assert settings.auth.ldap_uri == "ldaps://directory.example:636"
+    assert settings.auth.ldap_bind_password == "directory-secret"
+    assert settings.auth.ldap_scopes == ("portal", "write")
+    assert settings.auth.kerberos_hostname == "portal.example.com"
+    assert settings.auth.kerberos_keytab == "/run/secrets/portal.keytab"
+    assert settings.auth.kerberos_scopes == ("portal", "admin")
+    snapshot = settings.auth.public_snapshot()
+    assert snapshot["ldap_bind_password_configured"] is True
+    assert snapshot["kerberos_keytab_configured"] is True
+    assert "directory-secret" not in str(snapshot)
 
 
 def test_settings_defaults_and_placeholder_key(monkeypatch) -> None:
