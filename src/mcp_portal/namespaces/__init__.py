@@ -17,6 +17,12 @@ from mcp_portal.egress import EgressPolicy
 from mcp_portal.redaction import Redactor
 from mcp_portal.security import InvocationContext, current_invocation
 from mcp_portal.tasks import MemoryTaskStore
+from mcp_portal.tenancy import (
+    TenantMongoDBConnectors,
+    TenantScope,
+    TenantSQLExecutor,
+    TenantTaskService,
+)
 
 Clock = Callable[[], datetime]
 NamespaceFactory = Callable[["NamespaceContext"], FastMCP]
@@ -77,6 +83,64 @@ class NamespaceContext:
         if invocation is None:
             raise RuntimeError("Invocation context is unavailable outside a tool request")
         return invocation
+
+    def tenant_scope(self) -> TenantScope:
+        """Return storage partitions derived from verified invocation identity.
+
+        Returns:
+            Trusted tenant partition helper.
+        """
+        return TenantScope.from_invocation(
+            self.invocation(), require_tenant=self.settings.enterprise.require_tenant
+        )
+
+    def tenant_tasks(self) -> TenantTaskService:
+        """Return a task façade bound to the verified owner and tenant.
+
+        Returns:
+            Invocation-bound task service.
+        """
+        return TenantTaskService(self.tasks, self.tenant_scope())
+
+    def tenant_sql(self) -> TenantSQLExecutor:
+        """Return SQL execution checks bound to the verified tenant partition.
+
+        Returns:
+            Tenant-aware SQLAlchemy execution helper.
+        """
+        return TenantSQLExecutor(self.tenant_scope())
+
+    def mongodb(self) -> TenantMongoDBConnectors:
+        """Return tenant-partitioned LangChain MongoDB connectors.
+
+        Returns:
+            Tenant-safe MongoDB connector façade.
+        """
+        connectors = self.clients.create("langchain_mongodb", namespace=self.name)
+        return TenantMongoDBConnectors(connectors, self.tenant_scope())
+
+    def outbound_url(self, url: str) -> str:
+        """Validate an outbound URL against the namespace egress policy.
+
+        Args:
+            url: Candidate HTTPS destination.
+
+        Returns:
+            Approved normalized destination.
+        """
+        return self.egress.validate_url(url)
+
+    async def downstream_credential(self, audience: str) -> str:
+        """Request an audience-bound credential for the verified caller.
+
+        Args:
+            audience: Exact downstream HTTPS resource URI.
+
+        Returns:
+            Broker-issued downstream credential.
+        """
+        approved_audience = self.outbound_url(audience)
+        return await self.credentials.credential_for(self.invocation().identity, approved_audience)
 
 
 @dataclass(frozen=True)

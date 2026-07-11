@@ -77,9 +77,22 @@ class ScopePolicyEngine:
         """
         _ = arguments
         tags = frozenset((tool.meta or {}).get("tags", ()))
+        supplied_tenant_fields = {
+            name
+            for name in {"tenant", "tenant_id", "organization_id", "org_id"}
+            if name in arguments
+        }
+        if supplied_tenant_fields and "tenant_override" not in tags:
+            return PolicyDecision(
+                False,
+                "tenant identifiers must come from verified invocation context",
+                obligations=("remove_untrusted_tenant_arguments",),
+            )
         required = frozenset(
             scope for tag in tags for scope in self.settings.authorization.tag_scopes.get(tag, ())
         ) | frozenset((tool.meta or {}).get("required_scopes", ()))
+        if "tenant_override" in tags:
+            required = required | {"tenant.admin"}
         obligations: list[str] = []
         if "destructive" in tags:
             obligations.append("approval_required")
@@ -90,6 +103,8 @@ class ScopePolicyEngine:
             return PolicyDecision(True, "authentication disabled", required, tuple(obligations))
         if invocation.identity.subject is None and invocation.identity.client_id is None:
             return PolicyDecision(False, "verified identity is required", required)
+        if self.settings.enterprise.require_tenant and invocation.identity.tenant_id is None:
+            return PolicyDecision(False, "verified tenant claim is required", required)
 
         missing = required - invocation.identity.scopes
         if missing:

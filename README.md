@@ -107,6 +107,13 @@ policy, a downstream credential-broker boundary, and an authorization-bound task
 See [the enterprise roadmap](docs/enterprise-roadmap.md) for production adapters and rollout
 phases.
 
+For multi-tenant deployments set `MCP_PORTAL_REQUIRE_TENANT=true`. Namespace tools should
+use `context.tenant_scope()` for cache keys and MongoDB filters/document metadata;
+`context.tenant_sql()` for statements that explicitly bind `:portal_tenant`;
+`context.tenant_tasks()` for tasks; and `context.mongodb()` for partitioned chat history,
+caches, vector stores, and loaders. Tenant identifiers supplied as ordinary tool arguments are
+rejected by default because the verified invocation claim is authoritative.
+
 Enterprise deployments can instead use `MCP_PORTAL_AUTH_PROVIDER=ldap`, `kerberos`, or
 `ldap+kerberos`. LDAP accepts HTTP Basic credentials and requires HTTPS plus an encrypted
 LDAPS/StartTLS directory connection. Kerberos accepts HTTP Negotiate tickets for a configured

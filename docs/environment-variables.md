@@ -271,6 +271,7 @@ cache = connectors.cache()
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
 | `MCP_PORTAL_PRODUCTION_REQUIRE_AUTH` | `false` | No | Fail hardened production startup when no authentication provider is configured. Enable for every remotely reachable deployment. |
+| `MCP_PORTAL_REQUIRE_TENANT` | `false` | No | Deny authenticated tool calls without the configured verified tenant claim. Enable for multi-tenant deployments. |
 | `MCP_PORTAL_TENANT_CLAIM` | `tenant_id` | No | Verified token claim used to partition tenant state. |
 | `MCP_PORTAL_AUDIT_ENABLED` | `true` | No | Emit sanitized authorization and completion audit events. |
 | `MCP_PORTAL_TOOL_TIMEOUT_SECONDS` | `30` | No | Default deadline applied to every tool invocation. |
@@ -283,6 +284,14 @@ cache = connectors.cache()
 In-memory quota and task stores are reference implementations. Multi-instance deployments
 must provide shared quota and durable task adapters. Destructive tools require a configured
 single-use approval verifier; the default verifier denies them.
+
+When tenant isolation is enabled, namespaces must derive storage identifiers through
+`context.tenant_scope()`, execute SQL through `context.tenant_sql()` with an explicit
+`:portal_tenant` bind, use `context.tenant_tasks()` instead of the raw task store, and use
+`context.mongodb()` instead of creating `langchain_mongodb` directly. Arguments named
+`tenant`, `tenant_id`, `organization_id`, or `org_id` are rejected unless the tool is
+explicitly tagged `tenant_override` and the caller has the corresponding `tenant.admin`
+scope.
 
 ## Observability Settings
 

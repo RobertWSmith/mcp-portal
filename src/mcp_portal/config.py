@@ -414,6 +414,7 @@ class EnterpriseSettings:
     """
 
     require_auth: bool = False
+    require_tenant: bool = False
     tenant_claim: str = "tenant_id"
     audit_enabled: bool = True
     tool_timeout_seconds: float = 30.0
@@ -431,6 +432,7 @@ class EnterpriseSettings:
         """
         return {
             "require_auth": self.require_auth,
+            "require_tenant": self.require_tenant,
             "tenant_claim": self.tenant_claim,
             "audit_enabled": self.audit_enabled,
             "tool_timeout_seconds": self.tool_timeout_seconds,
@@ -768,6 +770,7 @@ class Settings:
             ),
             enterprise=EnterpriseSettings(
                 require_auth=_bool_env("MCP_PORTAL_PRODUCTION_REQUIRE_AUTH", default=False),
+                require_tenant=_bool_env("MCP_PORTAL_REQUIRE_TENANT", default=False),
                 tenant_claim=(_optional_env("MCP_PORTAL_TENANT_CLAIM") or "tenant_id"),
                 audit_enabled=_bool_env("MCP_PORTAL_AUDIT_ENABLED", default=True),
                 tool_timeout_seconds=_float_env("MCP_PORTAL_TOOL_TIMEOUT_SECONDS", default=30.0),
@@ -924,6 +927,8 @@ class Settings:
         problems: list[str] = []
         if self.enterprise.require_auth and not self.auth.enabled:
             problems.append("authentication is required but no provider is configured")
+        if self.enterprise.require_tenant and not self.auth.enabled:
+            problems.append("tenant isolation requires an authentication provider")
 
         if self.auth.provider == "jwt":
             if not self.auth.jwt_issuer:

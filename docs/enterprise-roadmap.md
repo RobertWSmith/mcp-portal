@@ -12,6 +12,12 @@ do not leak into namespace business logic.
 2. **Tenant context and audit** — derive subject, tenant, client, and scopes only from a
    verified token; partition downstream state using that context; emit sanitized lifecycle
    records through an append-only audit sink.
+
+   Implemented tenant façades provide stable non-reversible partition tokens, reserved
+   MongoDB metadata and filters, SQLAlchemy bind parameters, subject-scoped chat sessions,
+   cache/vector wrappers, and task methods that never accept caller-supplied ownership.
+   Cross-tenant administrative tools must opt in with `tenant_override` and require
+   `tenant.admin`.
 3. **Outbound trust boundary** — require an audience-bound credential broker and validate
    outbound HTTPS destinations against an explicit hostname policy. Inbound MCP tokens are
    never exposed through the namespace context.
