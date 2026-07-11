@@ -4,7 +4,6 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from prefab_ui.actions import CallTool, SetState
 from prefab_ui.app import PrefabApp
@@ -32,6 +31,7 @@ from mcp_portal.config import Settings
 from mcp_portal.errors import InternalPortalError, PortalError
 from mcp_portal.namespaces import (
     NamespaceDebugPanel,
+    NamespaceProvider,
     NamespaceRuntime,
     NamespaceStatus,
     iter_namespace_discovery_errors,
@@ -41,7 +41,7 @@ from mcp_portal.namespaces import (
 def create_debug_app(
     settings: Settings,
     namespace_runtimes: Sequence[NamespaceRuntime] = (),
-) -> FastMCP:
+) -> NamespaceProvider:
     """Create the debug tool server.
 
     Args:
@@ -49,9 +49,9 @@ def create_debug_app(
         namespace_runtimes: Namespace manifests paired with their runtime contexts.
 
     Returns:
-        A FastMCP server with dashboard and snapshot tools.
+        A provider with dashboard and snapshot tools.
     """
-    app = FastMCP("MCP Portal Debug")
+    app = NamespaceProvider("MCP Portal Debug")
 
     @app.tool(
         title="Debug Runtime Snapshot",

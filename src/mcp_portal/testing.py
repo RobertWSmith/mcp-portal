@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastmcp import Client
-from mcp.server.fastmcp import FastMCP
 
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import (
@@ -13,7 +12,13 @@ from mcp_portal.config import (
     OpenAISettings,
     Settings,
 )
-from mcp_portal.namespaces import Clock, Namespace, NamespaceContext, build_namespace_context
+from mcp_portal.namespaces import (
+    Clock,
+    Namespace,
+    NamespaceContext,
+    NamespaceProvider,
+    build_namespace_context,
+)
 from mcp_portal.redaction import Redactor
 
 
@@ -105,7 +110,7 @@ def create_namespace_test_context(
     selected_settings = settings or create_test_settings()
     namespace = Namespace(
         name=namespace_name,
-        create=_empty_namespace_server,
+        create=_empty_namespace_provider,
         description="Test namespace.",
         tags=frozenset({"test"}),
     )
@@ -155,13 +160,13 @@ def create_namespace_test_client(
     )
 
 
-def _empty_namespace_server(context: NamespaceContext) -> FastMCP:
-    """Create an empty namespace server for test context construction.
+def _empty_namespace_provider(context: NamespaceContext) -> NamespaceProvider:
+    """Create an empty provider for test context construction.
 
     Args:
         context: Runtime services shared with the test namespace.
 
     Returns:
-        An empty FastMCP server named for the test namespace.
+        An empty provider named for the test namespace.
     """
-    return FastMCP(f"Test {context.name}")
+    return NamespaceProvider(f"Test {context.name}")

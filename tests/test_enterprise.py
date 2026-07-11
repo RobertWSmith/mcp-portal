@@ -30,7 +30,7 @@ from mcp_portal.errors import (
     UpstreamPortalError,
     ValidationPortalError,
 )
-from mcp_portal.namespaces import Namespace
+from mcp_portal.namespaces import Namespace, NamespaceProvider
 from mcp_portal.policy import PolicyDecision, ScopePolicyEngine
 from mcp_portal.resilience import AdmissionController, MemoryQuotaBackend
 from mcp_portal.security import (
@@ -139,31 +139,31 @@ async def test_catalog_only_discloses_authorized_namespaces_and_components() -> 
     """Verify namespace policy filters discovery and direct component access."""
 
     def namespace_server(label: str):
-        def create(context) -> FastMCP:
+        def create(context) -> NamespaceProvider:
             _ = context
-            child = FastMCP(label)
+            provider = NamespaceProvider(label)
 
-            @child.tool(meta={"tags": ["readonly"]})
+            @provider.tool(meta={"tags": ["readonly"]})
             def inspect_record() -> str:
                 """Inspect a governed record."""
                 return label
 
-            @child.resource(f"portal://{label}/record")
+            @provider.resource(f"portal://{label}/record")
             def record() -> str:
                 """Return a governed resource."""
                 return label
 
-            @child.resource(f"portal://{label}/records/{{record_id}}")
+            @provider.resource(f"portal://{label}/records/{{record_id}}")
             def record_by_id(record_id: str) -> str:
                 """Return a governed resource-template result."""
                 return f"{label}:{record_id}"
 
-            @child.prompt(name="review")
+            @provider.prompt(name="review")
             def review() -> str:
                 """Return a governed review prompt."""
                 return f"Review {label}"
 
-            return child
+            return provider
 
         return create
 
@@ -241,20 +241,20 @@ async def test_catalog_fails_closed_without_identity_or_with_custom_denial() -> 
 
 @pytest.mark.asyncio
 async def test_destructive_operations_fail_closed_without_approval() -> None:
-    def destructive_server(context) -> FastMCP:
+    def destructive_provider(context) -> NamespaceProvider:
         _ = context
-        child = FastMCP("destructive")
+        provider = NamespaceProvider("destructive")
 
-        @child.tool(meta={"tags": ["destructive"]})
+        @provider.tool(meta={"tags": ["destructive"]})
         def erase() -> str:
             """Erase test state."""
             return "erased"
 
-        return child
+        return provider
 
     server = create_mcp(
         create_test_settings(),
-        namespaces=[Namespace("danger", destructive_server)],
+        namespaces=[Namespace("danger", destructive_provider)],
         include_debug_ui=False,
         approval_verifier=RejectingApprovalVerifier(),
     )
@@ -264,24 +264,24 @@ async def test_destructive_operations_fail_closed_without_approval() -> None:
 
 @pytest.mark.asyncio
 async def test_deadline_and_response_size_are_enforced() -> None:
-    def slow_server(context) -> FastMCP:
+    def slow_provider(context) -> NamespaceProvider:
         _ = context
-        child = FastMCP("slow")
+        provider = NamespaceProvider("slow")
 
-        @child.tool(meta={"tags": ["readonly"]})
+        @provider.tool(meta={"tags": ["readonly"]})
         async def wait() -> str:
             """Wait beyond the test deadline."""
             await anyio.sleep(0.05)
             return "done"
 
-        return child
+        return provider
 
     settings = replace(
         create_test_settings(),
         enterprise=EnterpriseSettings(tool_timeout_seconds=0.01),
         middleware=MiddlewareSettings(enabled=True, response_max_bytes=1),
     )
-    namespace = Namespace("slow", slow_server)
+    namespace = Namespace("slow", slow_provider)
     server = create_mcp(
         settings,
         namespaces=[namespace],
@@ -375,15 +375,16 @@ def test_governed_provider_mounts_tools_resources_and_prompts() -> None:
     assert tool.annotations is not None
     assert tool.annotations.readOnlyHint is True
     assert tool.meta["owner"] == "platform-engineering"
-    assert "portal://runtime/config" in server._resource_manager._resources
+    assert "portal://health/runtime/config" in server._resource_manager._resources
+    assert "portal://health/runtime/{section}" in server._resource_manager._templates
     assert "health_diagnose" in server._prompt_manager._prompts
 
 
 def test_governed_tool_merges_explicit_and_inferred_semantics() -> None:
     """Verify explicit annotations win while missing standard hints are inferred."""
-    child = FastMCP("Example")
+    provider = NamespaceProvider("Example")
 
-    @child.tool(
+    @provider.tool(
         annotations=ToolAnnotations(readOnlyHint=False),
         meta={"tags": ["idempotent", "external"]},
     )
@@ -392,7 +393,7 @@ def test_governed_tool_merges_explicit_and_inferred_semantics() -> None:
         return {"updated": True}
 
     server = create_mcp(create_test_settings(), namespaces=(), include_debug_ui=False)
-    server.mount(child, namespace="example")
+    server.mount(provider, namespace="example")
     tool = server._tool_manager.get_tool("example_update_record")
 
     assert tool is not None

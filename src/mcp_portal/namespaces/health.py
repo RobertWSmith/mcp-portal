@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from mcp_portal.namespaces import (
     NamespaceContext,
     NamespaceDebugPanel,
+    NamespaceProvider,
     NamespaceStatus,
     register_namespace,
 )
@@ -117,18 +117,18 @@ def health_debug_panel(context: NamespaceContext) -> NamespaceDebugPanel:
     maturity="stable",
     data_classification="internal",
 )
-def create_server(context: NamespaceContext) -> FastMCP:
-    """Create the health namespace server.
+def create_provider(context: NamespaceContext) -> NamespaceProvider:
+    """Create the health namespace provider.
 
     Args:
         context: Runtime services shared with the health namespace.
 
     Returns:
-        A configured FastMCP child server with health and config tools.
+        A complete provider demonstrating tools, resources, templates, and prompts.
     """
-    server = FastMCP("Health")
+    provider = NamespaceProvider("Health")
 
-    @server.tool(
+    @provider.tool(
         title="Portal Health Check",
         annotations=ToolAnnotations(
             title="Portal Health Check",
@@ -149,7 +149,7 @@ def create_server(context: NamespaceContext) -> FastMCP:
         context.logger.debug("Health ping requested")
         return HealthPingResult(status="ok", message="pong")
 
-    @server.tool(
+    @provider.tool(
         title="Public Runtime Configuration",
         annotations=ToolAnnotations(
             title="Public Runtime Configuration",
@@ -171,8 +171,8 @@ def create_server(context: NamespaceContext) -> FastMCP:
         snapshot = context.public_snapshot(context.settings.public_snapshot())
         return RuntimeConfigResult.model_validate(snapshot)
 
-    @server.resource(
-        "portal://runtime/config",
+    @provider.resource(
+        "portal://health/runtime/config",
         name="runtime-config",
         description="Non-secret MCP Portal runtime configuration.",
         mime_type="application/json",
@@ -187,16 +187,47 @@ def create_server(context: NamespaceContext) -> FastMCP:
             context.public_snapshot(context.settings.public_snapshot()), sort_keys=True
         )
 
-    @server.prompt(
+    @provider.resource(
+        "portal://health/runtime/{section}",
+        name="runtime-section",
+        title="Runtime Configuration Section",
+        description="One non-secret section of MCP Portal runtime configuration.",
+        mime_type="application/json",
+    )
+    def runtime_section_resource(section: str) -> str:
+        """Return one public runtime configuration section.
+
+        Args:
+            section: Top-level public settings section to retrieve.
+
+        Returns:
+            Canonical JSON representation of the requested section.
+
+        Raises:
+            ValueError: If the requested public settings section does not exist.
+        """
+        snapshot = context.public_snapshot(context.settings.public_snapshot())
+        if section not in snapshot:
+            raise ValueError(f"Unknown public runtime configuration section: {section}")
+        return json.dumps(snapshot[section], sort_keys=True)
+
+    @provider.prompt(
         name="diagnose",
+        title="Diagnose MCP Portal",
         description="Guide a user through safe MCP Portal operational diagnosis.",
     )
-    def diagnose_prompt() -> str:
+    def diagnose_prompt(focus: str = "runtime configuration") -> str:
         """Return a user-controlled operational diagnosis prompt.
+
+        Args:
+            focus: Operational area the user wants to investigate.
 
         Returns:
             Prompt text that avoids requesting or exposing secrets.
         """
-        return "Inspect portal health and public runtime metadata without exposing secrets."
+        return (
+            f"Diagnose MCP Portal {focus} using health tools and portal://health resources. "
+            "Do not request, reveal, or infer secret values."
+        )
 
-    return server
+    return provider

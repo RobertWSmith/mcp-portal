@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.types import Annotations, Icon, ToolAnnotations
 
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
@@ -25,7 +25,6 @@ from mcp_portal.tenancy import (
 )
 
 Clock = Callable[[], datetime]
-NamespaceFactory = Callable[["NamespaceContext"], FastMCP]
 NamespaceHealthCheck = Callable[["NamespaceContext"], "NamespaceStatus"]
 NamespaceDebugFactory = Callable[["NamespaceContext"], "NamespaceDebugPanel"]
 NamespaceState = Literal["ok", "warning", "error", "disabled"]
@@ -36,7 +35,7 @@ class NamespaceContext:
     """Runtime services shared with a namespace.
 
     Attributes:
-        name: Namespace prefix used when mounting tools.
+        name: Namespace prefix used when mounting provider components.
         settings: Shared runtime settings.
         logger: Logger scoped to this namespace.
         redactor: Redactor used before exposing diagnostics.
@@ -141,6 +140,283 @@ class NamespaceContext:
         """
         approved_audience = self.outbound_url(audience)
         return await self.credentials.credential_for(self.invocation().identity, approved_audience)
+
+
+@dataclass(frozen=True)
+class ToolContribution:
+    """Declarative tool registration owned by a namespace provider.
+
+    Attributes:
+        function: Callable implementing the tool.
+        name: Optional unqualified MCP tool name.
+        title: Optional human-readable title.
+        description: Optional public description.
+        annotations: Standard MCP tool behavior hints.
+        icons: Optional client-display icons.
+        meta: Portal-specific governance metadata.
+        structured_output: Optional structured-output override.
+    """
+
+    function: Callable[..., Any]
+    name: str | None = None
+    title: str | None = None
+    description: str | None = None
+    annotations: ToolAnnotations | None = None
+    icons: tuple[Icon, ...] = ()
+    meta: Mapping[str, Any] = field(default_factory=dict)
+    structured_output: bool | None = None
+
+
+@dataclass(frozen=True)
+class ResourceContribution:
+    """Declarative resource or resource-template registration.
+
+    Attributes:
+        function: Callable that reads or renders the resource.
+        uri: Stable resource URI or URI template.
+        name: Optional unqualified display name.
+        title: Optional human-readable title.
+        description: Optional public description.
+        mime_type: Optional content MIME type.
+        icons: Optional client-display icons.
+        annotations: Standard MCP resource hints.
+        meta: Portal-specific governance metadata.
+    """
+
+    function: Callable[..., Any]
+    uri: str
+    name: str | None = None
+    title: str | None = None
+    description: str | None = None
+    mime_type: str | None = None
+    icons: tuple[Icon, ...] = ()
+    annotations: Annotations | None = None
+    meta: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_template(self) -> bool:
+        """Report whether the contribution URI contains template parameters.
+
+        Returns:
+            True when the URI contains a template placeholder.
+        """
+        return "{" in self.uri and "}" in self.uri
+
+
+@dataclass(frozen=True)
+class PromptContribution:
+    """Declarative prompt registration owned by a namespace provider.
+
+    Attributes:
+        function: Callable that renders the prompt.
+        name: Optional unqualified MCP prompt name.
+        title: Optional human-readable title.
+        description: Optional public description.
+        icons: Optional client-display icons.
+    """
+
+    function: Callable[..., Any]
+    name: str | None = None
+    title: str | None = None
+    description: str | None = None
+    icons: tuple[Icon, ...] = ()
+
+
+class NamespaceProvider:
+    """Collect every MCP primitive contributed by one namespace.
+
+    Namespace modules use this object instead of constructing a child FastMCP server.
+    The portal can therefore mount tools, resources, resource templates, and prompts
+    through public server registration APIs while applying one governance boundary.
+    """
+
+    def __init__(self, title: str) -> None:
+        """Initialize an empty provider.
+
+        Args:
+            title: Human-readable provider name used in diagnostics and tests.
+        """
+        self.title = title
+        self._tools: list[ToolContribution] = []
+        self._resources: list[ResourceContribution] = []
+        self._prompts: list[PromptContribution] = []
+
+    @property
+    def tools(self) -> tuple[ToolContribution, ...]:
+        """Return tool contributions in registration order.
+
+        Returns:
+            Immutable tool contribution sequence.
+        """
+        return tuple(self._tools)
+
+    @property
+    def resources(self) -> tuple[ResourceContribution, ...]:
+        """Return resources and resource templates in registration order.
+
+        Returns:
+            Immutable resource contribution sequence.
+        """
+        return tuple(self._resources)
+
+    @property
+    def prompts(self) -> tuple[PromptContribution, ...]:
+        """Return prompt contributions in registration order.
+
+        Returns:
+            Immutable prompt contribution sequence.
+        """
+        return tuple(self._prompts)
+
+    def tool(
+        self,
+        name: str | None = None,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        annotations: ToolAnnotations | None = None,
+        icons: Iterable[Icon] = (),
+        meta: Mapping[str, Any] | None = None,
+        structured_output: bool | None = None,
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register a namespace tool contribution.
+
+        Args:
+            name: Optional unqualified tool name.
+            title: Optional human-readable title.
+            description: Optional public description override.
+            annotations: Standard MCP tool behavior hints.
+            icons: Optional client-display icons.
+            meta: Portal-specific governance metadata.
+            structured_output: Optional structured-output override.
+
+        Returns:
+            Decorator that records the contributed callable.
+        """
+
+        def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
+            """Record a tool callable.
+
+            Args:
+                function: Tool implementation to contribute.
+
+            Returns:
+                The original callable unchanged.
+            """
+            self._tools.append(
+                ToolContribution(
+                    function=function,
+                    name=name,
+                    title=title,
+                    description=description,
+                    annotations=annotations,
+                    icons=tuple(icons),
+                    meta=dict(meta or {}),
+                    structured_output=structured_output,
+                )
+            )
+            return function
+
+        return decorator
+
+    def resource(
+        self,
+        uri: str,
+        *,
+        name: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        mime_type: str | None = None,
+        icons: Iterable[Icon] = (),
+        annotations: Annotations | None = None,
+        meta: Mapping[str, Any] | None = None,
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register a static resource or URI-template contribution.
+
+        Args:
+            uri: Stable resource URI or URI template.
+            name: Optional unqualified resource name.
+            title: Optional human-readable title.
+            description: Optional public description.
+            mime_type: Optional content MIME type.
+            icons: Optional client-display icons.
+            annotations: Standard MCP resource hints.
+            meta: Portal-specific governance metadata.
+
+        Returns:
+            Decorator that records the contributed callable.
+        """
+
+        def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
+            """Record a resource callable.
+
+            Args:
+                function: Resource reader or renderer to contribute.
+
+            Returns:
+                The original callable unchanged.
+            """
+            self._resources.append(
+                ResourceContribution(
+                    function=function,
+                    uri=uri,
+                    name=name,
+                    title=title,
+                    description=description,
+                    mime_type=mime_type,
+                    icons=tuple(icons),
+                    annotations=annotations,
+                    meta=dict(meta or {}),
+                )
+            )
+            return function
+
+        return decorator
+
+    def prompt(
+        self,
+        name: str | None = None,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        icons: Iterable[Icon] = (),
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register a user-controlled prompt contribution.
+
+        Args:
+            name: Optional unqualified prompt name.
+            title: Optional human-readable title.
+            description: Optional public description.
+            icons: Optional client-display icons.
+
+        Returns:
+            Decorator that records the contributed callable.
+        """
+
+        def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
+            """Record a prompt callable.
+
+            Args:
+                function: Prompt renderer to contribute.
+
+            Returns:
+                The original callable unchanged.
+            """
+            self._prompts.append(
+                PromptContribution(
+                    function=function,
+                    name=name,
+                    title=title,
+                    description=description,
+                    icons=tuple(icons),
+                )
+            )
+            return function
+
+        return decorator
+
+
+NamespaceFactory = Callable[["NamespaceContext"], NamespaceProvider]
 
 
 @dataclass(frozen=True)

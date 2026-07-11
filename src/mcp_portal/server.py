@@ -40,7 +40,12 @@ from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
 from mcp_portal.debug_ui import create_debug_app
 from mcp_portal.errors import PermissionPortalError, TimeoutPortalError, UpstreamPortalError
-from mcp_portal.namespaces import Namespace, build_namespace_runtimes, iter_namespaces
+from mcp_portal.namespaces import (
+    Namespace,
+    NamespaceProvider,
+    build_namespace_runtimes,
+    iter_namespaces,
+)
 from mcp_portal.observability import configure_observability_environment
 from mcp_portal.policy import PolicyDecision, PolicyEngine, ScopePolicyEngine
 from mcp_portal.resilience import AdmissionController, QuotaBackend
@@ -235,23 +240,28 @@ class PortalFastMCP(FastMCP):
                 return self._component_namespaces.get(("template", template.uri_template))
         return None
 
-    def mount(self, server: FastMCP, *, namespace: Namespace | str) -> None:
-        """Copy a namespace server's tools onto this server with a prefix.
+    def mount(self, provider: NamespaceProvider, *, namespace: Namespace | str) -> None:
+        """Mount every component contributed by a namespace provider.
 
         Args:
-            server: Child SDK FastMCP server whose tools should be copied.
+            provider: Declarative provider containing namespace MCP primitives.
             namespace: Namespace prefix to prepend to child tool names.
         """
         namespace_name = namespace.name if isinstance(namespace, Namespace) else namespace
-        _copy_provider_components(server, self, prefix=f"{namespace_name}_", namespace=namespace)
+        _install_provider_components(
+            provider,
+            self,
+            prefix=f"{namespace_name}_",
+            namespace=namespace,
+        )
 
-    def add_provider(self, provider: FastMCP) -> None:
-        """Copy development provider tools onto this server without a prefix.
+    def add_provider(self, provider: NamespaceProvider) -> None:
+        """Mount an ungoverned development provider without a prefix.
 
         Args:
-            provider: SDK FastMCP server exposing provider tools.
+            provider: Declarative provider exposing MCP primitives.
         """
-        _copy_provider_components(provider, self, prefix="")
+        _install_provider_components(provider, self, prefix="")
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         """Enforce identity, policy, quotas, deadlines, size limits, and audit.
@@ -450,28 +460,37 @@ def _governed_tool(tool: Tool, name: str, namespace: Namespace | str | None) -> 
     )
 
 
-def _copy_provider_components(
-    source: FastMCP,
+def _install_provider_components(
+    provider: NamespaceProvider,
     target: FastMCP,
     *,
     prefix: str,
     namespace: Namespace | str | None = None,
 ) -> None:
-    """Copy tools, resources, templates, and prompts from a namespace provider.
+    """Install tools, resources, templates, and prompts through public SDK APIs.
 
     Args:
-        source: Server whose components should be copied.
+        provider: Declarative namespace component provider.
         target: Server receiving copied component definitions.
         prefix: Prefix to prepend to copied tool and prompt names.
         namespace: Optional governed namespace manifest.
     """
-    target_tools = target._tool_manager._tools
     configured_scopes = (
         frozenset(target.portal_settings.authorization.namespace_scopes.get(namespace.name, ()))
         if isinstance(target, PortalFastMCP) and isinstance(namespace, Namespace)
         else frozenset()
     )
-    for tool in source._tool_manager.list_tools():
+    for contribution in provider.tools:
+        tool = Tool.from_function(
+            contribution.function,
+            name=contribution.name,
+            title=contribution.title,
+            description=contribution.description,
+            annotations=contribution.annotations,
+            icons=list(contribution.icons) or None,
+            meta=dict(contribution.meta),
+            structured_output=contribution.structured_output,
+        )
         name = f"{prefix}{tool.name}"
         governed = _governed_tool(tool, name, namespace)
         if isinstance(namespace, Namespace):
@@ -482,18 +501,41 @@ def _copy_provider_components(
             governed = governed.model_copy(update={"meta": meta})
             if isinstance(target, PortalFastMCP):
                 target._component_namespaces[("tool", name)] = namespace
-        target_tools[name] = governed
+        target.add_tool(
+            governed.fn,
+            name=governed.name,
+            title=governed.title,
+            description=governed.description,
+            annotations=governed.annotations,
+            icons=governed.icons,
+            meta=governed.meta,
+            structured_output=contribution.structured_output,
+        )
 
-    target._resource_manager._resources.update(source._resource_manager._resources)
-    target._resource_manager._templates.update(source._resource_manager._templates)
-    if isinstance(target, PortalFastMCP) and isinstance(namespace, Namespace):
-        for resource in source._resource_manager.list_resources():
-            target._component_namespaces[("resource", str(resource.uri))] = namespace
-        for template in source._resource_manager.list_templates():
-            target._component_namespaces[("template", template.uri_template)] = namespace
-    for prompt in source._prompt_manager.list_prompts():
-        name = f"{prefix}{prompt.name}"
-        target._prompt_manager._prompts[name] = prompt.model_copy(update={"name": name})
+    for contribution in provider.resources:
+        name = f"{prefix}{contribution.name or contribution.function.__name__}"
+        target.resource(
+            contribution.uri,
+            name=name,
+            title=contribution.title,
+            description=contribution.description,
+            mime_type=contribution.mime_type,
+            icons=list(contribution.icons) or None,
+            annotations=contribution.annotations,
+            meta=dict(contribution.meta),
+        )(contribution.function)
+        if isinstance(target, PortalFastMCP) and isinstance(namespace, Namespace):
+            component_type = "template" if contribution.is_template else "resource"
+            target._component_namespaces[(component_type, contribution.uri)] = namespace
+
+    for contribution in provider.prompts:
+        name = f"{prefix}{contribution.name or contribution.function.__name__}"
+        target.prompt(
+            name=name,
+            title=contribution.title,
+            description=contribution.description,
+            icons=list(contribution.icons) or None,
+        )(contribution.function)
         if isinstance(target, PortalFastMCP) and isinstance(namespace, Namespace):
             target._component_namespaces[("prompt", name)] = namespace
 
@@ -632,7 +674,7 @@ def create_mcp(
 
     for runtime in namespace_runtimes:
         if not settings.namespace_enabled(runtime.namespace.name):
-            runtime.context.logger.info("Namespace disabled; skipping tool mount")
+            runtime.context.logger.info("Namespace disabled; skipping provider mount")
             continue
 
         server.mount(runtime.namespace.create(runtime.context), namespace=runtime.namespace)

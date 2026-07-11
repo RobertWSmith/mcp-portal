@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 from fastmcp import Client
-from mcp.server.fastmcp import FastMCP
 
 from mcp_portal.clients import ClientFactories
 from mcp_portal.debug_ui import _runtime_snapshot
@@ -15,6 +14,7 @@ from mcp_portal.namespaces import (
     Namespace,
     NamespaceContext,
     NamespaceDebugPanel,
+    NamespaceProvider,
     NamespaceStatus,
     build_namespace_runtimes,
 )
@@ -110,18 +110,18 @@ async def test_disabled_namespace_is_visible_but_not_mounted() -> None:
 async def test_namespace_test_client_mounts_one_namespace() -> None:
     """Verify the namespace test harness creates focused in-memory clients."""
 
-    def create_example_server(context: NamespaceContext) -> FastMCP:
-        server = FastMCP("Example")
+    def create_example_provider(context: NamespaceContext) -> NamespaceProvider:
+        provider = NamespaceProvider("Example")
 
-        @server.tool(meta={"tags": ["example", "readonly"]})
+        @provider.tool(meta={"tags": ["example", "readonly"]})
         def configured_model() -> str:
             return context.settings.large_language_model
 
-        return server
+        return provider
 
     namespace = Namespace(
         name="example",
-        create=create_example_server,
+        create=create_example_provider,
         description="Example namespace.",
         tags=frozenset({"example", "readonly"}),
     )
@@ -137,8 +137,8 @@ async def test_namespace_test_client_mounts_one_namespace() -> None:
 def test_namespace_debug_snapshot_handles_hook_failures() -> None:
     """Verify debug snapshots convert namespace hook failures into public errors."""
 
-    def create_empty_server(context: NamespaceContext) -> FastMCP:
-        return FastMCP(f"Broken {context.name}")
+    def create_empty_provider(context: NamespaceContext) -> NamespaceProvider:
+        return NamespaceProvider(f"Broken {context.name}")
 
     def broken_status(context: NamespaceContext) -> NamespaceStatus:
         raise RuntimeError(context.name)
@@ -153,7 +153,7 @@ def test_namespace_debug_snapshot_handles_hook_failures() -> None:
     settings = create_test_settings()
     namespace = Namespace(
         name="broken",
-        create=create_empty_server,
+        create=create_empty_provider,
         description="Broken namespace.",
         tags=frozenset({"broken"}),
         health_check=broken_status,

@@ -270,17 +270,18 @@ raise a permission error.
 
 ## Add A Namespace
 
-Create a module under `src/mcp_portal/namespaces/` with a `create_server(context)`
-factory and decorate it with the namespace manifest:
+Create a module under `src/mcp_portal/namespaces/` with a `create_provider(context)`
+factory and decorate it with the namespace manifest. A provider can contribute the
+complete server-side MCP surface:
 
 ```python
-from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
 from mcp_portal.namespaces import (
     NamespaceContext,
     NamespaceDebugPanel,
+    NamespaceProvider,
     NamespaceStatus,
     register_namespace,
 )
@@ -317,18 +318,18 @@ def example_debug_panel(context: NamespaceContext) -> NamespaceDebugPanel:
     health_check=example_status,
     debug=example_debug_panel,
 )
-def create_server(context: NamespaceContext) -> FastMCP:
-    """Create the example namespace server.
+def create_provider(context: NamespaceContext) -> NamespaceProvider:
+    """Create the example namespace provider.
 
     Args:
         context: Runtime services shared with the namespace.
 
     Returns:
-        A configured FastMCP child server.
+        Tools, resources, resource templates, and prompts owned by the namespace.
     """
-    server = FastMCP("Example")
+    provider = NamespaceProvider("Example")
 
-    @server.tool(
+    @provider.tool(
         title="Greet User",
         annotations=ToolAnnotations(
             title="Greet User",
@@ -352,10 +353,28 @@ def create_server(context: NamespaceContext) -> FastMCP:
         context.logger.debug("Example greeting requested")
         return GreetingResult(message=f"Hello, {name}!")
 
-    return server
+    @provider.resource("portal://example/about", mime_type="text/plain")
+    def about() -> str:
+        """Describe the example namespace."""
+        return "Example MCP Portal namespace"
+
+    @provider.resource("portal://example/users/{name}", mime_type="text/plain")
+    def user(name: str) -> str:
+        """Return a templated user resource."""
+        return f"User: {name}"
+
+    @provider.prompt(name="welcome")
+    def welcome(name: str) -> str:
+        """Create a user-controlled welcome prompt."""
+        return f"Welcome {name} using the example namespace."
+
+    return provider
 ```
 
-FastMCP mounts the namespace with a prefix, so `hello` becomes `example_hello`.
+The portal prefixes tool and prompt names, so `hello` becomes `example_hello` and
+`welcome` becomes `example_welcome`. Resource URIs remain stable while their display
+names are prefixed. Registrations are installed through public FastMCP APIs rather than
+copying private manager state. See `namespaces/health.py` for the complete reference.
 Namespace modules are discovered automatically; adding the decorated module is enough.
 Use MCP `ToolAnnotations` for client-visible behavior and Pydantic response models for
 stable `outputSchema` and `structuredContent`. Keep `_meta.tags` only as portal policy

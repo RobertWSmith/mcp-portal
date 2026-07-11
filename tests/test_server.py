@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastmcp import Client
-from mcp.server.fastmcp import FastMCP
 
 import mcp_portal.namespaces as namespace_registry
 from mcp_portal.config import Settings
 from mcp_portal.debug_ui import _runtime_snapshot_text, create_debug_app
-from mcp_portal.namespaces import Namespace, NamespaceContext, build_namespace_runtimes
+from mcp_portal.namespaces import (
+    Namespace,
+    NamespaceContext,
+    NamespaceProvider,
+    build_namespace_runtimes,
+)
 from mcp_portal.server import create_mcp
 from mcp_portal.testing import create_test_settings
 
@@ -81,6 +87,29 @@ async def test_health_tools_publish_standard_mcp_semantics(client: Client) -> No
     }
 
 
+async def test_health_namespace_publishes_complete_server_surface(client: Client) -> None:
+    """Verify the reference namespace exposes resources, a template, and a prompt."""
+    resources = await client.list_resources()
+    templates = await client.list_resource_templates()
+    prompts = await client.list_prompts()
+
+    assert [(str(resource.uri), resource.name) for resource in resources] == [
+        ("portal://health/runtime/config", "health_runtime-config")
+    ]
+    assert [(template.uriTemplate, template.name) for template in templates] == [
+        ("portal://health/runtime/{section}", "health_runtime-section")
+    ]
+    assert [prompt.name for prompt in prompts] == ["health_diagnose"]
+
+    config_contents = await client.read_resource("portal://health/runtime/config")
+    section_contents = await client.read_resource("portal://health/runtime/health")
+    diagnosis = await client.get_prompt("health_diagnose", {"focus": "authorization"})
+
+    assert '"model_provider"' in config_contents[0].text
+    assert json.loads(section_contents[0].text) == {"enabled": True}
+    assert "Diagnose MCP Portal authorization" in diagnosis.messages[0].content.text
+
+
 async def test_debug_ui_tool_is_exposed(client: Client) -> None:
     """Verify the FastMCP Apps debug dashboard is available to dev tools."""
     tools = await client.list_tools()
@@ -93,13 +122,15 @@ async def test_debug_ui_provider_renders_dashboard(settings: Settings) -> None:
     """Verify the debug provider builds its snapshot tool and Prefab UI."""
     runtimes = build_namespace_runtimes(namespace_registry.iter_namespaces(), settings)
     debug_app = create_debug_app(settings, runtimes)
-    app_tools = {tool.name for tool in await debug_app.list_tools()}
+    server = create_mcp(settings, namespaces=(), include_debug_ui=False)
+    server.add_provider(debug_app)
+    app_tools = {tool.name for tool in await server.list_tools()}
 
-    async with Client(debug_app) as client:
+    async with Client(server) as client:
         snapshot_result = await client.call_tool("debug_snapshot", {})
         dashboard_result = await client.call_tool("portal_debug", {})
 
-    assert app_tools == {"debug_snapshot", "portal_debug"}
+    assert {"debug_snapshot", "portal_debug"} <= app_tools
     assert "large-model" in snapshot_result.content[0].text
     assert "Health Namespace" in snapshot_result.content[0].text
     assert dashboard_result.data["state"] == {
@@ -111,8 +142,10 @@ async def test_debug_ui_marks_missing_model_provider_settings() -> None:
     """Verify the dashboard handles missing provider settings."""
     settings = create_test_settings(openai_api_key=None)
     debug_app = create_debug_app(settings)
+    server = create_mcp(settings, namespaces=(), include_debug_ui=False)
+    server.add_provider(debug_app)
 
-    async with Client(debug_app) as client:
+    async with Client(server) as client:
         dashboard_result = await client.call_tool("portal_debug", {})
 
     assert '"configured": false' in dashboard_result.data["state"]["snapshot_text"]
@@ -123,28 +156,28 @@ def test_namespace_registration_decorator_records_factory(monkeypatch) -> None:
     monkeypatch.setattr(namespace_registry, "_NAMESPACE_REGISTRY", {})
     monkeypatch.setattr(namespace_registry, "_DISCOVERED", True)
 
-    def create_example_server(context: NamespaceContext) -> FastMCP:
-        """Create a placeholder namespace server.
+    def create_example_provider(context: NamespaceContext) -> NamespaceProvider:
+        """Create a placeholder namespace provider.
 
         Args:
             context: Runtime services shared with the namespace.
 
         Returns:
-            A configured FastMCP child server.
+            A configured namespace provider.
         """
-        return FastMCP(f"Example {context.settings.large_language_model}")
+        return NamespaceProvider(f"Example {context.settings.large_language_model}")
 
     decorated = namespace_registry.register_namespace(
         "example",
         description="Example namespace.",
         tags={"example", "test"},
-    )(create_example_server)
+    )(create_example_provider)
 
-    assert decorated is create_example_server
+    assert decorated is create_example_provider
     assert namespace_registry.iter_namespaces() == (
         Namespace(
             "example",
-            create_example_server,
+            create_example_provider,
             description="Example namespace.",
             tags=frozenset({"example", "test"}),
         ),
@@ -156,49 +189,49 @@ def test_namespace_registration_rejects_duplicate_names(monkeypatch) -> None:
     monkeypatch.setattr(namespace_registry, "_NAMESPACE_REGISTRY", {})
     monkeypatch.setattr(namespace_registry, "_DISCOVERED", True)
 
-    def create_first_server(context: NamespaceContext) -> FastMCP:
-        """Create a first placeholder namespace server.
+    def create_first_provider(context: NamespaceContext) -> NamespaceProvider:
+        """Create a first placeholder namespace provider.
 
         Args:
             context: Runtime services shared with the namespace.
 
         Returns:
-            A configured FastMCP child server.
+            A configured namespace provider.
         """
-        return FastMCP(f"First {context.settings.large_language_model}")
+        return NamespaceProvider(f"First {context.settings.large_language_model}")
 
-    def create_second_server(context: NamespaceContext) -> FastMCP:
-        """Create a second placeholder namespace server.
+    def create_second_provider(context: NamespaceContext) -> NamespaceProvider:
+        """Create a second placeholder namespace provider.
 
         Args:
             context: Runtime services shared with the namespace.
 
         Returns:
-            A configured FastMCP child server.
+            A configured namespace provider.
         """
-        return FastMCP(f"Second {context.settings.large_language_model}")
+        return NamespaceProvider(f"Second {context.settings.large_language_model}")
 
-    namespace_registry.register_namespace("example")(create_first_server)
+    namespace_registry.register_namespace("example")(create_first_provider)
 
     with pytest.raises(ValueError, match="already registered"):
-        namespace_registry.register_namespace("example")(create_second_server)
+        namespace_registry.register_namespace("example")(create_second_provider)
 
 
 async def test_custom_namespace_registry(settings: Settings) -> None:
     """Verify callers can mount custom namespace registries."""
 
-    def create_example_server(context: NamespaceContext) -> FastMCP:
-        """Create an example namespace server for test composition.
+    def create_example_provider(context: NamespaceContext) -> NamespaceProvider:
+        """Create an example namespace provider for test composition.
 
         Args:
             context: Runtime services shared with the namespace.
 
         Returns:
-            A configured FastMCP child server.
+            A configured namespace provider.
         """
-        server = FastMCP("Example")
+        provider = NamespaceProvider("Example")
 
-        @server.tool()
+        @provider.tool()
         def configured_model() -> str:
             """Return the configured large model name.
 
@@ -207,7 +240,7 @@ async def test_custom_namespace_registry(settings: Settings) -> None:
             """
             return context.settings.large_language_model
 
-        return server
+        return provider
 
     async with Client(
         create_mcp(
@@ -215,7 +248,7 @@ async def test_custom_namespace_registry(settings: Settings) -> None:
             namespaces=(
                 Namespace(
                     "example",
-                    create_example_server,
+                    create_example_provider,
                     description="Example namespace.",
                     tags=frozenset({"example", "readonly"}),
                 ),
