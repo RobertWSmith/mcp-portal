@@ -1,0 +1,144 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from typing import Any, Protocol
+
+from mcp_portal.policy import PolicyDecision
+from mcp_portal.security import InvocationContext
+
+
+@dataclass(frozen=True)
+class AuditEvent:
+    """Sanitized append-only record of a tool lifecycle event.
+
+    Attributes:
+        occurred_at: UTC event timestamp.
+        event: Lifecycle event type.
+        request_id: Server-generated correlation identifier.
+        tool_name: Fully-qualified tool name.
+        subject: Authenticated human or workload subject.
+        tenant_id: Trusted tenant partition.
+        client_id: Calling OAuth client identifier.
+        argument_digest: SHA-256 digest of canonicalized arguments.
+        allowed: Optional authorization result.
+        reason: Optional policy reason.
+        outcome: Optional completion outcome.
+        duration_ms: Optional execution duration.
+    """
+
+    occurred_at: str
+    event: str
+    request_id: str
+    tool_name: str
+    subject: str | None
+    tenant_id: str | None
+    client_id: str | None
+    argument_digest: str
+    allowed: bool | None = None
+    reason: str | None = None
+    outcome: str | None = None
+    duration_ms: float | None = None
+
+
+class AuditSink(Protocol):
+    """Destination for immutable audit events."""
+
+    async def append(self, event: AuditEvent) -> None:
+        """Append one immutable event.
+
+        Args:
+            event: Sanitized event to persist.
+        """
+        ...
+
+
+class LoggingAuditSink:
+    """JSON audit sink suitable for forwarding into a SIEM collector."""
+
+    def __init__(self, logger: logging.Logger | None = None) -> None:
+        """Initialize the sink.
+
+        Args:
+            logger: Optional dedicated audit logger.
+        """
+        self.logger = logger or logging.getLogger("mcp_portal.audit")
+
+    async def append(self, event: AuditEvent) -> None:
+        """Emit one event as canonical JSON.
+
+        Args:
+            event: Sanitized event to emit.
+        """
+        self.logger.info("portal_audit %s", json.dumps(asdict(event), sort_keys=True))
+
+
+class MemoryAuditSink:
+    """Deterministic audit sink for tests and embedded deployments."""
+
+    def __init__(self) -> None:
+        """Initialize an empty in-memory event collection."""
+        self.events: list[AuditEvent] = []
+
+    async def append(self, event: AuditEvent) -> None:
+        """Append one event to memory.
+
+        Args:
+            event: Sanitized event to retain.
+        """
+        self.events.append(event)
+
+
+def digest_arguments(arguments: dict[str, Any]) -> str:
+    """Hash arguments without retaining their potentially sensitive values.
+
+    Args:
+        arguments: Validated invocation arguments.
+
+    Returns:
+        Hexadecimal SHA-256 digest.
+    """
+    canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def audit_event(
+    event: str,
+    invocation: InvocationContext,
+    arguments: dict[str, Any],
+    *,
+    decision: PolicyDecision | None = None,
+    outcome: str | None = None,
+    duration_ms: float | None = None,
+) -> AuditEvent:
+    """Compose a normalized audit event without raw arguments or credentials.
+
+    Args:
+        event: Lifecycle event name.
+        invocation: Trusted invocation context.
+        arguments: Validated invocation arguments.
+        decision: Optional authorization decision.
+        outcome: Optional completion outcome.
+        duration_ms: Optional execution duration.
+
+    Returns:
+        Sanitized audit event.
+    """
+    identity = invocation.identity
+    return AuditEvent(
+        occurred_at=datetime.now(timezone.utc).isoformat(),
+        event=event,
+        request_id=invocation.request_id,
+        tool_name=invocation.tool_name,
+        subject=identity.subject,
+        tenant_id=identity.tenant_id,
+        client_id=identity.client_id,
+        argument_digest=digest_arguments(arguments),
+        allowed=decision.allowed if decision else None,
+        reason=decision.reason if decision else None,
+        outcome=outcome,
+        duration_ms=duration_ms,
+    )

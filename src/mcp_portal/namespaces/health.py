@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -57,6 +58,10 @@ def health_debug_panel(context: NamespaceContext) -> NamespaceDebugPanel:
     tags={"core", "health", "readonly"},
     health_check=health_status,
     debug=health_debug_panel,
+    owner="platform-engineering",
+    version="1.0.0",
+    maturity="stable",
+    data_classification="internal",
 )
 def create_server(context: NamespaceContext) -> FastMCP:
     """Create the health namespace server.
@@ -88,5 +93,33 @@ def create_server(context: NamespaceContext) -> FastMCP:
         """
         context.logger.debug("Health runtime configuration requested")
         return context.public_snapshot(context.settings.public_snapshot())
+
+    @server.resource(
+        "portal://runtime/config",
+        name="runtime-config",
+        description="Non-secret MCP Portal runtime configuration.",
+        mime_type="application/json",
+    )
+    def runtime_config_resource() -> str:
+        """Return non-secret configuration as a client-managed MCP resource.
+
+        Returns:
+            Canonical JSON representation of public runtime settings.
+        """
+        return json.dumps(
+            context.public_snapshot(context.settings.public_snapshot()), sort_keys=True
+        )
+
+    @server.prompt(
+        name="diagnose",
+        description="Guide a user through safe MCP Portal operational diagnosis.",
+    )
+    def diagnose_prompt() -> str:
+        """Return a user-controlled operational diagnosis prompt.
+
+        Returns:
+            Prompt text that avoids requesting or exposing secrets.
+        """
+        return "Inspect portal health and public runtime metadata without exposing secrets."
 
     return server

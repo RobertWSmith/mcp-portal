@@ -60,3 +60,28 @@ def tool_contract_payload(tool: Tool) -> dict[str, Any]:
         "_meta": dumped.get("_meta"),
     }
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def compare_tool_contract_manifests(
+    baseline: dict[str, str], current: dict[str, str]
+) -> dict[str, tuple[str, ...]]:
+    """Classify added, removed, and changed tool contracts for CI governance.
+
+    Args:
+        baseline: Previously approved tool fingerprint mapping.
+        current: Newly generated tool fingerprint mapping.
+
+    Returns:
+        Sorted contract names grouped by change classification.
+    """
+    baseline_names = set(baseline)
+    current_names = set(current)
+    return {
+        "added": tuple(sorted(current_names - baseline_names)),
+        "removed": tuple(sorted(baseline_names - current_names)),
+        "changed": tuple(
+            sorted(
+                name for name in baseline_names & current_names if baseline[name] != current[name]
+            )
+        ),
+    }

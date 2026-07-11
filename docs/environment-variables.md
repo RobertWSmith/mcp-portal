@@ -72,6 +72,7 @@ Optional service-principal environment variables consumed by Azure Identity:
 | `MCP_PORTAL_HEALTH_ENABLED` | `true` | No | Enables or disables the namespaced health tools. This does not remove the production operational health route. |
 | `MCP_PORTAL_HTTP_PATH` | `/mcp` | No | MCP endpoint path for ASGI and production HTTP deployments. CLI `--path` can override the run path for HTTP-based transports. |
 | `MCP_PORTAL_HEALTH_PATH` | `/healthz` | No | Unauthenticated operational health endpoint path added by the production server profile. |
+| `MCP_PORTAL_READINESS_PATH` | `/readyz` | No | Unauthenticated readiness endpoint. Returns 503 when a registered namespace reports an error. |
 | `MCP_PORTAL_JSON_RESPONSE` | unset | No | Optional FastMCP JSON response mode for HTTP-based transports. Leave blank to use FastMCP defaults. |
 | `MCP_PORTAL_STATELESS_HTTP` | unset | No | Optional FastMCP stateless HTTP mode. Leave blank to use FastMCP defaults. |
 
@@ -92,6 +93,7 @@ production transports.
 | `MCP_PORTAL_AUTH_JWT_ISSUER` | unset | No | Optional expected JWT issuer. |
 | `MCP_PORTAL_AUTH_JWT_AUDIENCE` | unset | No | Optional expected JWT audience. |
 | `MCP_PORTAL_AUTH_JWT_ALGORITHM` | `RS256` | No | JWT signing algorithm to accept. |
+| `MCP_PORTAL_AUTH_RESOURCE_SERVER_URL` | unset | Required for hardened JWT production | Canonical external HTTPS URI used for Protected Resource Metadata and resource/audience binding. |
 | `MCP_PORTAL_AUTH_LDAP_URI` | unset | When LDAP is enabled | Directory URI. Must use `ldaps://`, or `ldap://` together with StartTLS. |
 | `MCP_PORTAL_AUTH_LDAP_BASE_DN` | unset | When LDAP search mode is used | Base DN beneath which the username is searched. |
 | `MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE` | unset | Alternative to base-DN search | Direct bind DN template containing `{username}`, for example `uid={username},ou=people,dc=example,dc=com`. |
@@ -263,6 +265,24 @@ vector_store = connectors.vector_search(embedding=embeddings)
 history = connectors.chat_message_history(session_id="chat-session")
 cache = connectors.cache()
 ```
+
+## Enterprise Control Plane Settings
+
+| Variable | Default | Required | Description |
+| --- | --- | --- | --- |
+| `MCP_PORTAL_PRODUCTION_REQUIRE_AUTH` | `false` | No | Fail hardened production startup when no authentication provider is configured. Enable for every remotely reachable deployment. |
+| `MCP_PORTAL_TENANT_CLAIM` | `tenant_id` | No | Verified token claim used to partition tenant state. |
+| `MCP_PORTAL_AUDIT_ENABLED` | `true` | No | Emit sanitized authorization and completion audit events. |
+| `MCP_PORTAL_TOOL_TIMEOUT_SECONDS` | `30` | No | Default deadline applied to every tool invocation. |
+| `MCP_PORTAL_MAX_CONCURRENT_REQUESTS` | `100` | No | Maximum concurrent in-process tool executions. |
+| `MCP_PORTAL_TASK_MAX_TTL_SECONDS` | `3600` | No | Maximum task retention duration accepted by the task store. |
+| `MCP_PORTAL_TASK_MAX_CONCURRENT_PER_SUBJECT` | `10` | No | Maximum working tasks owned by one authenticated subject. |
+| `MCP_PORTAL_EGRESS_ALLOWED_HOSTS` | unset | Recommended | Exact comma- or space-separated HTTPS hostname allowlist exposed to namespaces. |
+| `MCP_PORTAL_NAMESPACE_ALLOWLIST` | unset | Recommended | Namespace names admitted into this deployment. Empty retains automatic discovery behavior. |
+
+In-memory quota and task stores are reference implementations. Multi-instance deployments
+must provide shared quota and durable task adapters. Destructive tools require a configured
+single-use approval verifier; the default verifier denies them.
 
 ## Observability Settings
 

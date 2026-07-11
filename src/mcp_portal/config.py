@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -235,6 +236,7 @@ class AuthSettings:
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
     jwt_algorithm: str = "RS256"
+    resource_server_url: str | None = None
     ldap_uri: str | None = None
     ldap_base_dn: str | None = None
     ldap_user_dn_template: str | None = None
@@ -276,6 +278,7 @@ class AuthSettings:
             "jwt_issuer_configured": self.jwt_issuer is not None,
             "jwt_audience_configured": self.jwt_audience is not None,
             "jwt_algorithm": self.jwt_algorithm,
+            "resource_server_url_configured": self.resource_server_url is not None,
             "ldap_uri_configured": self.ldap_uri is not None,
             "ldap_base_dn_configured": self.ldap_base_dn is not None,
             "ldap_user_dn_template_configured": self.ldap_user_dn_template is not None,
@@ -373,6 +376,7 @@ class HttpSettings:
 
     path: str = "/mcp"
     health_path: str = "/healthz"
+    readiness_path: str = "/readyz"
     json_response: bool | None = None
     stateless: bool | None = None
 
@@ -385,8 +389,56 @@ class HttpSettings:
         return {
             "path": self.path,
             "health_path": self.health_path,
+            "readiness_path": self.readiness_path,
             "json_response": self.json_response,
             "stateless": self.stateless,
+        }
+
+
+@dataclass(frozen=True)
+class EnterpriseSettings:
+    """Cross-cutting enterprise control-plane settings.
+
+    These settings deliberately describe policy boundaries rather than individual
+    integrations so namespaces can remain portable.
+
+    Attributes:
+        require_auth: Whether hardened production startup requires authentication.
+        tenant_claim: Verified token claim used for tenant partitioning.
+        audit_enabled: Whether request lifecycle audit events are emitted.
+        tool_timeout_seconds: Default maximum tool execution time.
+        max_concurrent_requests: Maximum in-process concurrent tool calls.
+        task_max_ttl_seconds: Maximum task result retention period.
+        task_max_concurrent_per_subject: Maximum working tasks for one owner.
+        egress_allowed_hosts: Approved outbound DNS hostnames.
+    """
+
+    require_auth: bool = False
+    tenant_claim: str = "tenant_id"
+    audit_enabled: bool = True
+    tool_timeout_seconds: float = 30.0
+    max_concurrent_requests: int = 100
+    task_max_ttl_seconds: int = 3600
+    task_max_concurrent_per_subject: int = 10
+    egress_allowed_hosts: tuple[str, ...] = ()
+    namespace_allowlist: tuple[str, ...] = ()
+
+    def public_snapshot(self) -> dict[str, object]:
+        """Return non-secret enterprise posture metadata.
+
+        Returns:
+            Enterprise posture metadata without secret values.
+        """
+        return {
+            "require_auth": self.require_auth,
+            "tenant_claim": self.tenant_claim,
+            "audit_enabled": self.audit_enabled,
+            "tool_timeout_seconds": self.tool_timeout_seconds,
+            "max_concurrent_requests": self.max_concurrent_requests,
+            "task_max_ttl_seconds": self.task_max_ttl_seconds,
+            "task_max_concurrent_per_subject": self.task_max_concurrent_per_subject,
+            "egress_allowlist_configured": bool(self.egress_allowed_hosts),
+            "namespace_allowlist": list(self.namespace_allowlist),
         }
 
 
@@ -610,6 +662,7 @@ class Settings:
     authorization: AuthorizationSettings = field(default_factory=AuthorizationSettings)
     middleware: MiddlewareSettings = field(default_factory=MiddlewareSettings)
     http: HttpSettings = field(default_factory=HttpSettings)
+    enterprise: EnterpriseSettings = field(default_factory=EnterpriseSettings)
     namespace_discovery: NamespaceDiscoverySettings = field(
         default_factory=NamespaceDiscoverySettings
     )
@@ -672,6 +725,7 @@ class Settings:
                 jwt_issuer=_optional_env("MCP_PORTAL_AUTH_JWT_ISSUER"),
                 jwt_audience=_optional_env("MCP_PORTAL_AUTH_JWT_AUDIENCE"),
                 jwt_algorithm=os.getenv("MCP_PORTAL_AUTH_JWT_ALGORITHM", "RS256"),
+                resource_server_url=_optional_env("MCP_PORTAL_AUTH_RESOURCE_SERVER_URL"),
                 ldap_uri=_optional_env("MCP_PORTAL_AUTH_LDAP_URI"),
                 ldap_base_dn=_optional_env("MCP_PORTAL_AUTH_LDAP_BASE_DN"),
                 ldap_user_dn_template=_optional_env("MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE"),
@@ -708,8 +762,22 @@ class Settings:
             http=HttpSettings(
                 path=os.getenv("MCP_PORTAL_HTTP_PATH", "/mcp"),
                 health_path=os.getenv("MCP_PORTAL_HEALTH_PATH", "/healthz"),
+                readiness_path=os.getenv("MCP_PORTAL_READINESS_PATH", "/readyz"),
                 json_response=_optional_bool_env("MCP_PORTAL_JSON_RESPONSE"),
                 stateless=_optional_bool_env("MCP_PORTAL_STATELESS_HTTP"),
+            ),
+            enterprise=EnterpriseSettings(
+                require_auth=_bool_env("MCP_PORTAL_PRODUCTION_REQUIRE_AUTH", default=False),
+                tenant_claim=(_optional_env("MCP_PORTAL_TENANT_CLAIM") or "tenant_id"),
+                audit_enabled=_bool_env("MCP_PORTAL_AUDIT_ENABLED", default=True),
+                tool_timeout_seconds=_float_env("MCP_PORTAL_TOOL_TIMEOUT_SECONDS", default=30.0),
+                max_concurrent_requests=_int_env("MCP_PORTAL_MAX_CONCURRENT_REQUESTS", default=100),
+                task_max_ttl_seconds=_int_env("MCP_PORTAL_TASK_MAX_TTL_SECONDS", default=3600),
+                task_max_concurrent_per_subject=_int_env(
+                    "MCP_PORTAL_TASK_MAX_CONCURRENT_PER_SUBJECT", default=10
+                ),
+                egress_allowed_hosts=_csv_env("MCP_PORTAL_EGRESS_ALLOWED_HOSTS"),
+                namespace_allowlist=_csv_env("MCP_PORTAL_NAMESPACE_ALLOWLIST"),
             ),
             namespace_discovery=NamespaceDiscoverySettings(
                 strict=_bool_env("MCP_PORTAL_NAMESPACE_DISCOVERY_STRICT", default=False),
@@ -849,6 +917,40 @@ class Settings:
             return self.health.enabled
         return True
 
+    def validate_production(self) -> None:
+        """Reject unsafe combinations when hardened production mode is requested."""
+        from mcp_portal.errors import ConfigurationPortalError
+
+        problems: list[str] = []
+        if self.enterprise.require_auth and not self.auth.enabled:
+            problems.append("authentication is required but no provider is configured")
+
+        if self.auth.provider == "jwt":
+            if not self.auth.jwt_issuer:
+                problems.append("JWT issuer is required")
+            if not self.auth.jwt_audience:
+                problems.append("JWT audience is required")
+            if not self.auth.resource_server_url:
+                problems.append("canonical resource server URL is required")
+
+        if self.auth.resource_server_url:
+            parsed = urlsplit(self.auth.resource_server_url)
+            is_loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                problems.append("resource server URL must be an absolute HTTP(S) URL")
+            elif parsed.scheme != "https" and not is_loopback:
+                problems.append("resource server URL must use HTTPS outside loopback")
+
+        if self.enterprise.tool_timeout_seconds <= 0:
+            problems.append("tool timeout must be positive")
+        if self.enterprise.max_concurrent_requests <= 0:
+            problems.append("maximum concurrent requests must be positive")
+
+        if problems:
+            raise ConfigurationPortalError(
+                "Production configuration is unsafe.", details={"problems": problems}
+            )
+
     def public_snapshot(self) -> dict[str, dict[str, object]]:
         """Return non-secret settings safe to expose through development tools.
 
@@ -865,6 +967,7 @@ class Settings:
             "authorization": self.authorization.public_snapshot(),
             "middleware": self.middleware.public_snapshot(),
             "http": self.http.public_snapshot(),
+            "enterprise": self.enterprise.public_snapshot(),
             "namespace_discovery": self.namespace_discovery.public_snapshot(),
             "observability": self.observability.public_snapshot(),
             "database": self.database.public_snapshot(),

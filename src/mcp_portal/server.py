@@ -3,11 +3,15 @@ from __future__ import annotations
 # ruff: noqa: E402
 
 import argparse
+import json
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 import sys
+import time
 from typing import Any, Literal
+
+import anyio
 
 # The MCP CLI imports `mcp dev src/mcp_portal/server.py` as a standalone
 # file, which skips the package's `src` root unless the project is installed.
@@ -20,6 +24,8 @@ if __package__ in {None, ""}:
 
 from mcp.server.auth.settings import AuthSettings as SdkAuthSettings
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.tools import Tool
+from mcp.types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -28,11 +34,18 @@ from mcp_portal.auth import (
     EnterpriseAuthSchemeMiddleware,
     create_auth_provider,
 )
+from mcp_portal.approvals import ApprovalVerifier, RejectingApprovalVerifier
+from mcp_portal.audit import AuditSink, LoggingAuditSink, audit_event
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
 from mcp_portal.debug_ui import create_debug_app
+from mcp_portal.errors import PermissionPortalError, TimeoutPortalError, UpstreamPortalError
 from mcp_portal.namespaces import Namespace, build_namespace_runtimes, iter_namespaces
 from mcp_portal.observability import configure_observability_environment
+from mcp_portal.policy import PolicyDecision, PolicyEngine, ScopePolicyEngine
+from mcp_portal.resilience import AdmissionController, QuotaBackend
+from mcp_portal.security import invocation_scope, new_invocation
+from mcp_portal.tasks import MemoryTaskStore
 
 Transport = Literal["stdio", "http", "sse", "streamable-http"]
 HTTP_TRANSPORTS: set[Transport] = {"http", "sse", "streamable-http"}
@@ -41,14 +54,49 @@ HTTP_TRANSPORTS: set[Transport] = {"http", "sse", "streamable-http"}
 class PortalFastMCP(FastMCP):
     """Small compatibility layer around the SDK FastMCP server."""
 
-    def mount(self, server: FastMCP, *, namespace: str) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        portal_settings: Settings | None = None,
+        policy_engine: PolicyEngine | None = None,
+        audit_sink: AuditSink | None = None,
+        quota_backend: QuotaBackend | None = None,
+        approval_verifier: ApprovalVerifier | None = None,
+        enforce_request_controls: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the compatibility server with enterprise request controls.
+
+        Args:
+            args: Positional SDK server arguments.
+            portal_settings: Portal configuration used by enforcement layers.
+            policy_engine: Optional external authorization policy adapter.
+            audit_sink: Optional append-only audit destination.
+            quota_backend: Optional distributed quota implementation.
+            approval_verifier: Optional out-of-band approval receipt verifier.
+            enforce_request_controls: Whether rate and size controls are active.
+            kwargs: Keyword SDK server arguments.
+        """
+        selected_settings = portal_settings or Settings.from_env()
+        self.portal_settings = selected_settings
+        self.policy_engine = policy_engine or ScopePolicyEngine(selected_settings)
+        self.audit_sink = audit_sink or LoggingAuditSink()
+        self.enforce_request_controls = enforce_request_controls
+        self.approval_verifier = approval_verifier or RejectingApprovalVerifier()
+        self.admission = AdmissionController(
+            selected_settings.enterprise.max_concurrent_requests, quota_backend
+        )
+        super().__init__(*args, **kwargs)
+
+    def mount(self, server: FastMCP, *, namespace: Namespace | str) -> None:
         """Copy a namespace server's tools onto this server with a prefix.
 
         Args:
             server: Child SDK FastMCP server whose tools should be copied.
             namespace: Namespace prefix to prepend to child tool names.
         """
-        _copy_tools(server, self, prefix=f"{namespace}_")
+        namespace_name = namespace.name if isinstance(namespace, Namespace) else namespace
+        _copy_provider_components(server, self, prefix=f"{namespace_name}_", namespace=namespace)
 
     def add_provider(self, provider: FastMCP) -> None:
         """Copy development provider tools onto this server without a prefix.
@@ -56,7 +104,101 @@ class PortalFastMCP(FastMCP):
         Args:
             provider: SDK FastMCP server exposing provider tools.
         """
-        _copy_tools(provider, self, prefix="")
+        _copy_provider_components(provider, self, prefix="")
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        """Enforce identity, policy, quotas, deadlines, size limits, and audit.
+
+        Args:
+            name: Mounted MCP tool name.
+            arguments: Validated tool arguments received from the client.
+
+        Returns:
+            MCP content returned by the underlying SDK tool handler.
+        """
+        tool = self._tool_manager.get_tool(name)
+        if tool is None:
+            return await super().call_tool(name, arguments)
+
+        invocation = new_invocation(
+            name,
+            self.portal_settings.enterprise.tenant_claim,
+            self.portal_settings.enterprise.tool_timeout_seconds,
+        )
+        started = time.perf_counter()
+        with invocation_scope(invocation):
+            decision = await self.policy_engine.authorize(invocation, tool, arguments)
+            if self.portal_settings.enterprise.audit_enabled:
+                await self.audit_sink.append(
+                    audit_event("authorization", invocation, arguments, decision=decision)
+                )
+            if not decision.allowed:
+                raise PermissionPortalError(
+                    "Tool invocation is not authorized.",
+                    details={"required_scopes": sorted(decision.required_scopes)},
+                )
+            if (
+                "approval_required" in decision.obligations
+                and not await self.approval_verifier.verify(invocation, tool, arguments)
+            ):
+                if self.portal_settings.enterprise.audit_enabled:
+                    await self.audit_sink.append(
+                        audit_event(
+                            "approval",
+                            invocation,
+                            arguments,
+                            decision=PolicyDecision(False, "approval receipt missing or invalid"),
+                        )
+                    )
+                raise PermissionPortalError(
+                    "Destructive tool invocation requires an approved out-of-band receipt."
+                )
+
+            subject = invocation.identity.subject or invocation.identity.client_id or "anonymous"
+            quota_key = f"{invocation.identity.tenant_id or '-'}:{subject}:{name}"
+            if self.enforce_request_controls:
+                await self.admission.check_quota(
+                    quota_key,
+                    self.portal_settings.middleware.rate_limit_per_second,
+                    self.portal_settings.middleware.rate_limit_burst,
+                )
+
+            outcome = "succeeded"
+            try:
+                async with self.admission.capacity:
+                    with anyio.fail_after(invocation.deadline_seconds):
+                        result = await super().call_tool(name, arguments)
+                if (
+                    self.enforce_request_controls
+                    and self.portal_settings.middleware.response_max_bytes > 0
+                ):
+                    size = len(json.dumps(result, default=str).encode("utf-8"))
+                    if size > self.portal_settings.middleware.response_max_bytes:
+                        raise UpstreamPortalError(
+                            "Tool response exceeded the configured size limit.",
+                            details={"size": size},
+                        )
+                return result
+            except TimeoutError as error:
+                outcome = "timed_out"
+                raise TimeoutPortalError(
+                    "Tool execution exceeded its deadline.", cause=error
+                ) from error
+            except Exception:
+                outcome = "failed"
+                raise
+            finally:
+                duration_ms = (time.perf_counter() - started) * 1000
+                if self.portal_settings.enterprise.audit_enabled:
+                    await self.audit_sink.append(
+                        audit_event(
+                            "completion",
+                            invocation,
+                            arguments,
+                            outcome=outcome,
+                            duration_ms=duration_ms,
+                        )
+                    )
 
     def http_app(
         self,
@@ -120,18 +262,64 @@ class PortalFastMCP(FastMCP):
         super().run(sdk_transport, mount_path=mount_path)
 
 
-def _copy_tools(source: FastMCP, target: FastMCP, *, prefix: str) -> None:
-    """Copy SDK FastMCP tools from one server to another.
+def _governed_tool(tool: Tool, name: str, namespace: Namespace | str | None) -> Tool:
+    """Apply standard MCP annotations and governed namespace metadata.
 
     Args:
-        source: Server whose tools should be copied.
-        target: Server receiving copied tool definitions.
-        prefix: Prefix to prepend to copied tool names.
+        tool: Source SDK tool registration.
+        name: Fully-qualified mounted name.
+        namespace: Optional governed namespace manifest.
+
+    Returns:
+        Copied tool registration with normalized public metadata.
+    """
+    meta = dict(tool.meta or {})
+    tags = frozenset(meta.get("tags", ()))
+    annotations = tool.annotations or ToolAnnotations(
+        readOnlyHint="readonly" in tags,
+        destructiveHint="destructive" in tags,
+        idempotentHint="idempotent" in tags or "readonly" in tags,
+        openWorldHint="external" in tags,
+    )
+    if isinstance(namespace, Namespace):
+        meta.update(
+            {
+                "namespace": namespace.name,
+                "namespace_version": namespace.version,
+                "owner": namespace.owner,
+                "maturity": namespace.maturity,
+                "data_classification": namespace.data_classification,
+                "required_scopes": sorted(namespace.required_scopes),
+            }
+        )
+    return tool.model_copy(update={"name": name, "annotations": annotations, "meta": meta})
+
+
+def _copy_provider_components(
+    source: FastMCP,
+    target: FastMCP,
+    *,
+    prefix: str,
+    namespace: Namespace | str | None = None,
+) -> None:
+    """Copy tools, resources, templates, and prompts from a namespace provider.
+
+    Args:
+        source: Server whose components should be copied.
+        target: Server receiving copied component definitions.
+        prefix: Prefix to prepend to copied tool and prompt names.
+        namespace: Optional governed namespace manifest.
     """
     target_tools = target._tool_manager._tools
     for tool in source._tool_manager.list_tools():
         name = f"{prefix}{tool.name}"
-        target_tools[name] = tool.model_copy(update={"name": name})
+        target_tools[name] = _governed_tool(tool, name, namespace)
+
+    target._resource_manager._resources.update(source._resource_manager._resources)
+    target._resource_manager._templates.update(source._resource_manager._templates)
+    for prompt in source._prompt_manager.list_prompts():
+        name = f"{prefix}{prompt.name}"
+        target._prompt_manager._prompts[name] = prompt.model_copy(update={"name": name})
 
 
 def _apply_transport_settings(
@@ -190,10 +378,11 @@ def _sdk_auth_settings(settings: Settings) -> SdkAuthSettings | None:
     resource_path = settings.http.path
     if not resource_path.startswith("/"):
         resource_path = f"/{resource_path}"
+    resource_server_url = settings.auth.resource_server_url or f"http://localhost{resource_path}"
 
     return SdkAuthSettings(
         issuer_url=issuer_url,
-        resource_server_url=f"http://localhost{resource_path}",
+        resource_server_url=resource_server_url,
         required_scopes=list(settings.auth.required_scopes),
     )
 
@@ -204,6 +393,11 @@ def create_mcp(
     include_debug_ui: bool = True,
     include_production_middleware: bool | None = None,
     clients: ClientFactories | None = None,
+    policy_engine: PolicyEngine | None = None,
+    audit_sink: AuditSink | None = None,
+    quota_backend: QuotaBackend | None = None,
+    approval_verifier: ApprovalVerifier | None = None,
+    task_store: MemoryTaskStore | None = None,
 ) -> FastMCP:
     """Create the top-level FastMCP server and mount namespace servers.
 
@@ -224,13 +418,24 @@ def create_mcp(
     namespace_manifests = tuple(
         namespaces or iter_namespaces(strict=settings.namespace_discovery.strict)
     )
+    if settings.enterprise.namespace_allowlist:
+        approved = frozenset(settings.enterprise.namespace_allowlist)
+        namespace_manifests = tuple(
+            namespace for namespace in namespace_manifests if namespace.name in approved
+        )
     shared_clients = clients or default_client_factories(settings)
     namespace_runtimes = build_namespace_runtimes(
         namespace_manifests,
         settings,
         clients=shared_clients,
+        tasks=task_store,
     )
     auth_provider = create_auth_provider(settings)
+    enforce_request_controls = (
+        settings.middleware.enabled
+        if include_production_middleware is None
+        else include_production_middleware
+    )
     server = PortalFastMCP(
         name="MCP Portal",
         instructions="Use namespaced tools for portal capabilities.",
@@ -240,15 +445,21 @@ def create_mcp(
         json_response=bool(settings.http.json_response),
         stateless_http=bool(settings.http.stateless),
         lifespan=create_portal_lifespan(shared_clients),
+        portal_settings=settings,
+        policy_engine=policy_engine,
+        audit_sink=audit_sink,
+        quota_backend=quota_backend,
+        approval_verifier=approval_verifier,
+        enforce_request_controls=enforce_request_controls,
     )
-    _ = include_production_middleware
+    server.namespace_runtimes = namespace_runtimes
 
     for runtime in namespace_runtimes:
         if not settings.namespace_enabled(runtime.namespace.name):
             runtime.context.logger.info("Namespace disabled; skipping tool mount")
             continue
 
-        server.mount(runtime.namespace.create(runtime.context), namespace=runtime.namespace.name)
+        server.mount(runtime.namespace.create(runtime.context), namespace=runtime.namespace)
 
     if include_debug_ui:
         server.add_provider(create_debug_app(settings, namespace_runtimes))
@@ -267,6 +478,7 @@ def create_production_mcp(settings: Settings | None = None) -> FastMCP:
         A configured production server without development UI providers.
     """
     selected_settings = settings or Settings.from_env()
+    selected_settings.validate_production()
     server = create_mcp(
         selected_settings,
         include_debug_ui=False,
@@ -334,6 +546,37 @@ def add_operational_routes(server: FastMCP, settings: Settings) -> FastMCP:
                 "oracle_configured": settings.database.oracle_configured,
                 "mongodb_configured": settings.mongodb.configured,
             }
+        )
+
+    @server.custom_route(settings.http.readiness_path, methods=["GET"], include_in_schema=False)
+    async def readiness_check(request: Request) -> Response:
+        """Return dependency and namespace readiness for traffic admission.
+
+        Args:
+            request: Starlette request for the readiness endpoint.
+
+        Returns:
+            JSON readiness result with a failing status when a namespace is unhealthy.
+        """
+        _ = request
+        statuses: dict[str, str] = {}
+        ready = True
+        for runtime in getattr(server, "namespace_runtimes", ()):
+            if not settings.namespace_enabled(runtime.namespace.name):
+                continue
+            if runtime.namespace.health_check is None:
+                statuses[runtime.namespace.name] = "unknown"
+                continue
+            try:
+                status = runtime.namespace.health_check(runtime.context)
+                statuses[runtime.namespace.name] = status.state
+                ready = ready and status.state in {"ok", "warning"}
+            except Exception:
+                statuses[runtime.namespace.name] = "error"
+                ready = False
+        return JSONResponse(
+            {"status": "ready" if ready else "not_ready", "namespaces": statuses},
+            status_code=200 if ready else 503,
         )
 
     return server

@@ -12,7 +12,11 @@ from mcp.server.fastmcp import FastMCP
 
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
+from mcp_portal.credentials import CredentialBroker, RejectingCredentialBroker
+from mcp_portal.egress import EgressPolicy
 from mcp_portal.redaction import Redactor
+from mcp_portal.security import InvocationContext, current_invocation
+from mcp_portal.tasks import MemoryTaskStore
 
 Clock = Callable[[], datetime]
 NamespaceFactory = Callable[["NamespaceContext"], FastMCP]
@@ -40,6 +44,9 @@ class NamespaceContext:
     redactor: Redactor
     clients: ClientFactories
     clock: Clock
+    egress: EgressPolicy
+    credentials: CredentialBroker
+    tasks: MemoryTaskStore
 
     def now(self) -> datetime:
         """Return the current time from the namespace clock.
@@ -59,6 +66,17 @@ class NamespaceContext:
             A public-safe copy of the value.
         """
         return self.redactor.redact(value)
+
+    def invocation(self) -> InvocationContext:
+        """Return trusted invocation state for tenant-aware namespace operations.
+
+        Returns:
+            Current request's trusted invocation context.
+        """
+        invocation = current_invocation()
+        if invocation is None:
+            raise RuntimeError("Invocation context is unavailable outside a tool request")
+        return invocation
 
 
 @dataclass(frozen=True)
@@ -148,10 +166,21 @@ class Namespace:
     tags: frozenset[str] = field(default_factory=frozenset)
     health_check: NamespaceHealthCheck | None = None
     debug: NamespaceDebugFactory | None = None
+    owner: str = "platform"
+    version: str = "1.0.0"
+    maturity: Literal["experimental", "beta", "stable", "deprecated"] = "stable"
+    data_classification: str = "internal"
+    required_scopes: frozenset[str] = field(default_factory=frozenset)
+    timeout_seconds: float | None = None
+    dependencies: tuple[str, ...] = ()
+    deprecation_date: str | None = None
+    replacement: str | None = None
 
     def __post_init__(self) -> None:
         """Normalize namespace metadata after dataclass initialization."""
         object.__setattr__(self, "tags", frozenset(self.tags))
+        object.__setattr__(self, "required_scopes", frozenset(self.required_scopes))
+        object.__setattr__(self, "dependencies", tuple(self.dependencies))
         if not self.name or not self.name.replace("_", "").isalnum():
             raise ValueError(f"Invalid namespace name {self.name!r}")
 
@@ -181,6 +210,15 @@ def register_namespace(
     tags: Iterable[str] = (),
     health_check: NamespaceHealthCheck | None = None,
     debug: NamespaceDebugFactory | None = None,
+    owner: str = "platform",
+    version: str = "1.0.0",
+    maturity: Literal["experimental", "beta", "stable", "deprecated"] = "stable",
+    data_classification: str = "internal",
+    required_scopes: Iterable[str] = (),
+    timeout_seconds: float | None = None,
+    dependencies: Iterable[str] = (),
+    deprecation_date: str | None = None,
+    replacement: str | None = None,
 ) -> Callable[[NamespaceFactory], NamespaceFactory]:
     """Create a decorator that registers a default namespace factory.
 
@@ -218,6 +256,15 @@ def register_namespace(
             tags=frozenset(tags),
             health_check=health_check,
             debug=debug,
+            owner=owner,
+            version=version,
+            maturity=maturity,
+            data_classification=data_classification,
+            required_scopes=frozenset(required_scopes),
+            timeout_seconds=timeout_seconds,
+            dependencies=tuple(dependencies),
+            deprecation_date=deprecation_date,
+            replacement=replacement,
         )
         return create
 
@@ -231,6 +278,9 @@ def build_namespace_runtimes(
     clients: ClientFactories | None = None,
     redactor: Redactor | None = None,
     clock: Clock | None = None,
+    egress: EgressPolicy | None = None,
+    credentials: CredentialBroker | None = None,
+    tasks: MemoryTaskStore | None = None,
 ) -> tuple[NamespaceRuntime, ...]:
     """Build runtime contexts for a group of namespaces.
 
@@ -257,6 +307,14 @@ def build_namespace_runtimes(
             settings.mongodb.connection_string,
         )
     )
+    shared_egress = egress or EgressPolicy(
+        allowed_hosts=frozenset(host.lower() for host in settings.enterprise.egress_allowed_hosts)
+    )
+    shared_credentials = credentials or RejectingCredentialBroker()
+    shared_tasks = tasks or MemoryTaskStore(
+        max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
+        max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
+    )
 
     return tuple(
         NamespaceRuntime(
@@ -267,6 +325,9 @@ def build_namespace_runtimes(
                 clients=shared_clients,
                 redactor=shared_redactor,
                 clock=clock,
+                egress=shared_egress,
+                credentials=shared_credentials,
+                tasks=shared_tasks,
             ),
         )
         for namespace in namespaces
@@ -280,6 +341,9 @@ def build_namespace_context(
     clients: ClientFactories,
     redactor: Redactor,
     clock: Clock | None = None,
+    egress: EgressPolicy | None = None,
+    credentials: CredentialBroker | None = None,
+    tasks: MemoryTaskStore | None = None,
 ) -> NamespaceContext:
     """Build the runtime context for one namespace.
 
@@ -289,6 +353,9 @@ def build_namespace_context(
         clients: Shared client factory registry.
         redactor: Shared diagnostic redactor.
         clock: Optional namespace clock.
+        egress: Optional outbound destination policy.
+        credentials: Optional downstream credential broker.
+        tasks: Optional authorization-bound task store.
 
     Returns:
         A namespace-scoped runtime context.
@@ -300,6 +367,13 @@ def build_namespace_context(
         redactor=redactor,
         clients=clients,
         clock=clock or utc_now,
+        egress=egress or EgressPolicy(),
+        credentials=credentials or RejectingCredentialBroker(),
+        tasks=tasks
+        or MemoryTaskStore(
+            max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
+            max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
+        ),
     )
 
 

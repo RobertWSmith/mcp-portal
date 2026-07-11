@@ -87,12 +87,25 @@ uvicorn mcp_portal.asgi:app --host 0.0.0.0 --port 8000
 ```
 
 The app uses `MCP_PORTAL_HTTP_PATH` for the MCP endpoint and `MCP_PORTAL_HEALTH_PATH`
-for the health probe. By default those are `/mcp` and `/healthz`.
+for the liveness probe. `MCP_PORTAL_READINESS_PATH` exposes namespace readiness. By default
+the routes are `/mcp`, `/healthz`, and `/readyz`.
 
 Remote HTTP deployments should set `MCP_PORTAL_AUTH_PROVIDER=jwt` with either
 `MCP_PORTAL_AUTH_JWT_JWKS_URI` or `MCP_PORTAL_AUTH_JWT_PUBLIC_KEY`. Static bearer
 tokens are available through `MCP_PORTAL_AUTH_PROVIDER=static`, but they are intended
 only for local smoke tests.
+
+Hardened deployments should also set `MCP_PORTAL_PRODUCTION_REQUIRE_AUTH=true` and
+`MCP_PORTAL_AUTH_RESOURCE_SERVER_URL` to the canonical external HTTPS MCP resource URI.
+JWT production validation then requires an issuer, audience, and resource URI before the
+server starts. The active tool-call path enforces tag scopes, per-identity quota partitions,
+concurrency, deadlines, response limits, standard safety annotations, approval requirements,
+and sanitized audit events.
+
+Enterprise namespaces receive trusted invocation identity/tenant context, an outbound HTTPS
+policy, a downstream credential-broker boundary, and an authorization-bound task store.
+See [the enterprise roadmap](docs/enterprise-roadmap.md) for production adapters and rollout
+phases.
 
 Enterprise deployments can instead use `MCP_PORTAL_AUTH_PROVIDER=ldap`, `kerberos`, or
 `ldap+kerberos`. LDAP accepts HTTP Basic credentials and requires HTTPS plus an encrypted
