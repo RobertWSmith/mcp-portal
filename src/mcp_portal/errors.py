@@ -11,7 +11,7 @@ class PortalError(Exception):
 
     Attributes:
         code: Stable machine-readable error code.
-        category: Broad error class used by tools and debug UIs.
+        category: Broad error class used by tools and diagnostics.
     """
 
     code = "portal_error"
@@ -46,15 +46,14 @@ class PortalError(Exception):
             redactor: Optional redactor used for diagnostic details.
 
         Returns:
-            Public error metadata safe for logs or debug UIs.
+            Public error metadata safe for logs or diagnostics.
         """
-        safe_details = self.details if redactor is None else redactor.redact(self.details)
         return {
             "code": self.code,
             "category": self.category,
             "message": self.message,
             "namespace": self.namespace,
-            "details": safe_details,
+            "details": self.details if redactor is None else redactor.redact(self.details),
         }
 
 

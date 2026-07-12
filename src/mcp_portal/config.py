@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -34,6 +35,100 @@ DEFAULT_TAG_SCOPE_RULES: dict[str, tuple[str, ...]] = {
 }
 OPENAI_API_KEY_PLACEHOLDER = "your-api-key"
 DEFAULT_AZURE_OPENAI_TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
+
+
+class EnvironmentVariable(StrEnum):
+    """Environment variables consumed by :meth:`Settings.from_env`."""
+
+    AZURE_CLIENT_ID = "AZURE_CLIENT_ID"
+    AZURE_CLIENT_SECRET = "AZURE_CLIENT_SECRET"
+    AZURE_OPENAI_API_VERSION = "AZURE_OPENAI_API_VERSION"
+    AZURE_OPENAI_EMBEDDING_MODEL_DEPLOYMENT = "AZURE_OPENAI_EMBEDDING_MODEL_DEPLOYMENT"
+    AZURE_OPENAI_ENDPOINT = "AZURE_OPENAI_ENDPOINT"
+    AZURE_OPENAI_LARGE_LANGUAGE_MODEL_DEPLOYMENT = "AZURE_OPENAI_LARGE_LANGUAGE_MODEL_DEPLOYMENT"
+    AZURE_OPENAI_SMALL_LANGUAGE_MODEL_DEPLOYMENT = "AZURE_OPENAI_SMALL_LANGUAGE_MODEL_DEPLOYMENT"
+    AZURE_OPENAI_TOKEN_SCOPE = "AZURE_OPENAI_TOKEN_SCOPE"
+    AZURE_TENANT_ID = "AZURE_TENANT_ID"
+    MCP_PORTAL_AUDIT_ENABLED = "MCP_PORTAL_AUDIT_ENABLED"
+    MCP_PORTAL_AUTH_JWT_ALGORITHM = "MCP_PORTAL_AUTH_JWT_ALGORITHM"
+    MCP_PORTAL_AUTH_JWT_AUDIENCE = "MCP_PORTAL_AUTH_JWT_AUDIENCE"
+    MCP_PORTAL_AUTH_JWT_ISSUER = "MCP_PORTAL_AUTH_JWT_ISSUER"
+    MCP_PORTAL_AUTH_JWT_JWKS_URI = "MCP_PORTAL_AUTH_JWT_JWKS_URI"
+    MCP_PORTAL_AUTH_JWT_PUBLIC_KEY = "MCP_PORTAL_AUTH_JWT_PUBLIC_KEY"
+    MCP_PORTAL_AUTH_KERBEROS_HOSTNAME = "MCP_PORTAL_AUTH_KERBEROS_HOSTNAME"
+    MCP_PORTAL_AUTH_KERBEROS_KEYTAB = "MCP_PORTAL_AUTH_KERBEROS_KEYTAB"
+    MCP_PORTAL_AUTH_KERBEROS_SCOPES = "MCP_PORTAL_AUTH_KERBEROS_SCOPES"
+    MCP_PORTAL_AUTH_KERBEROS_SERVICE = "MCP_PORTAL_AUTH_KERBEROS_SERVICE"
+    MCP_PORTAL_AUTH_LDAP_BASE_DN = "MCP_PORTAL_AUTH_LDAP_BASE_DN"
+    MCP_PORTAL_AUTH_LDAP_BIND_DN = "MCP_PORTAL_AUTH_LDAP_BIND_DN"
+    MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD = "MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD"
+    MCP_PORTAL_AUTH_LDAP_CA_CERT_FILE = "MCP_PORTAL_AUTH_LDAP_CA_CERT_FILE"
+    MCP_PORTAL_AUTH_LDAP_CONNECT_TIMEOUT = "MCP_PORTAL_AUTH_LDAP_CONNECT_TIMEOUT"
+    MCP_PORTAL_AUTH_LDAP_SCOPES = "MCP_PORTAL_AUTH_LDAP_SCOPES"
+    MCP_PORTAL_AUTH_LDAP_SEARCH_FILTER = "MCP_PORTAL_AUTH_LDAP_SEARCH_FILTER"
+    MCP_PORTAL_AUTH_LDAP_START_TLS = "MCP_PORTAL_AUTH_LDAP_START_TLS"
+    MCP_PORTAL_AUTH_LDAP_URI = "MCP_PORTAL_AUTH_LDAP_URI"
+    MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE = "MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE"
+    MCP_PORTAL_AUTH_PROVIDER = "MCP_PORTAL_AUTH_PROVIDER"
+    MCP_PORTAL_AUTH_REQUIRED_SCOPES = "MCP_PORTAL_AUTH_REQUIRED_SCOPES"
+    MCP_PORTAL_AUTH_RESOURCE_SERVER_URL = "MCP_PORTAL_AUTH_RESOURCE_SERVER_URL"
+    MCP_PORTAL_AUTH_STATIC_CLIENT_ID = "MCP_PORTAL_AUTH_STATIC_CLIENT_ID"
+    MCP_PORTAL_AUTH_STATIC_SCOPES = "MCP_PORTAL_AUTH_STATIC_SCOPES"
+    MCP_PORTAL_AUTH_STATIC_TOKEN = "MCP_PORTAL_AUTH_STATIC_TOKEN"
+    MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES = "MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES"
+    MCP_PORTAL_AUTHZ_TAG_SCOPES = "MCP_PORTAL_AUTHZ_TAG_SCOPES"
+    MCP_PORTAL_CIRCUIT_BREAKER_FAILURE_THRESHOLD = "MCP_PORTAL_CIRCUIT_BREAKER_FAILURE_THRESHOLD"
+    MCP_PORTAL_CIRCUIT_BREAKER_RECOVERY_SECONDS = "MCP_PORTAL_CIRCUIT_BREAKER_RECOVERY_SECONDS"
+    MCP_PORTAL_COST_ACCOUNTING_ENABLED = "MCP_PORTAL_COST_ACCOUNTING_ENABLED"
+    MCP_PORTAL_COST_CURRENCY = "MCP_PORTAL_COST_CURRENCY"
+    MCP_PORTAL_DATABASE_PROVIDER = "MCP_PORTAL_DATABASE_PROVIDER"
+    MCP_PORTAL_DATABASE_SQLALCHEMY_URL = "MCP_PORTAL_DATABASE_SQLALCHEMY_URL"
+    MCP_PORTAL_DOWNSTREAM_TIMEOUT_SECONDS = "MCP_PORTAL_DOWNSTREAM_TIMEOUT_SECONDS"
+    MCP_PORTAL_EGRESS_ALLOWED_HOSTS = "MCP_PORTAL_EGRESS_ALLOWED_HOSTS"
+    MCP_PORTAL_HEALTH_ENABLED = "MCP_PORTAL_HEALTH_ENABLED"
+    MCP_PORTAL_HEALTH_PATH = "MCP_PORTAL_HEALTH_PATH"
+    MCP_PORTAL_HTTP_PATH = "MCP_PORTAL_HTTP_PATH"
+    MCP_PORTAL_JSON_RESPONSE = "MCP_PORTAL_JSON_RESPONSE"
+    MCP_PORTAL_LOG_PAYLOAD_LENGTHS = "MCP_PORTAL_LOG_PAYLOAD_LENGTHS"
+    MCP_PORTAL_MAX_CONCURRENT_REQUESTS = "MCP_PORTAL_MAX_CONCURRENT_REQUESTS"
+    MCP_PORTAL_METRICS_ENABLED = "MCP_PORTAL_METRICS_ENABLED"
+    MCP_PORTAL_METRICS_INCLUDE_TENANT = "MCP_PORTAL_METRICS_INCLUDE_TENANT"
+    MCP_PORTAL_MIDDLEWARE_ENABLED = "MCP_PORTAL_MIDDLEWARE_ENABLED"
+    MCP_PORTAL_MODEL_PROVIDER = "MCP_PORTAL_MODEL_PROVIDER"
+    MCP_PORTAL_MONGODB_CONNECTION_STRING = "MCP_PORTAL_MONGODB_CONNECTION_STRING"
+    MCP_PORTAL_MONGODB_DATABASE = "MCP_PORTAL_MONGODB_DATABASE"
+    MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX = "MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX"
+    MCP_PORTAL_NAMESPACE_ALLOWLIST = "MCP_PORTAL_NAMESPACE_ALLOWLIST"
+    MCP_PORTAL_NAMESPACE_DISCOVERY_STRICT = "MCP_PORTAL_NAMESPACE_DISCOVERY_STRICT"
+    MCP_PORTAL_ORACLE_DSN = "MCP_PORTAL_ORACLE_DSN"
+    MCP_PORTAL_ORACLE_PASSWORD = "MCP_PORTAL_ORACLE_PASSWORD"
+    MCP_PORTAL_ORACLE_POOL_MAX = "MCP_PORTAL_ORACLE_POOL_MAX"
+    MCP_PORTAL_ORACLE_POOL_MIN = "MCP_PORTAL_ORACLE_POOL_MIN"
+    MCP_PORTAL_ORACLE_USER = "MCP_PORTAL_ORACLE_USER"
+    MCP_PORTAL_PRICING_VERSION = "MCP_PORTAL_PRICING_VERSION"
+    MCP_PORTAL_PRODUCTION_REQUIRE_AUTH = "MCP_PORTAL_PRODUCTION_REQUIRE_AUTH"
+    MCP_PORTAL_RATE_LIMIT_BURST = "MCP_PORTAL_RATE_LIMIT_BURST"
+    MCP_PORTAL_RATE_LIMIT_PER_SECOND = "MCP_PORTAL_RATE_LIMIT_PER_SECOND"
+    MCP_PORTAL_READINESS_PATH = "MCP_PORTAL_READINESS_PATH"
+    MCP_PORTAL_REQUIRE_TENANT = "MCP_PORTAL_REQUIRE_TENANT"
+    MCP_PORTAL_RESPONSE_MAX_BYTES = "MCP_PORTAL_RESPONSE_MAX_BYTES"
+    MCP_PORTAL_STATELESS_HTTP = "MCP_PORTAL_STATELESS_HTTP"
+    MCP_PORTAL_STRUCTURED_LOGGING = "MCP_PORTAL_STRUCTURED_LOGGING"
+    MCP_PORTAL_TASK_MAX_CONCURRENT_PER_SUBJECT = "MCP_PORTAL_TASK_MAX_CONCURRENT_PER_SUBJECT"
+    MCP_PORTAL_TASK_MAX_TTL_SECONDS = "MCP_PORTAL_TASK_MAX_TTL_SECONDS"
+    MCP_PORTAL_TENANT_CLAIM = "MCP_PORTAL_TENANT_CLAIM"
+    MCP_PORTAL_TOOL_CONCURRENCY_LIMITS = "MCP_PORTAL_TOOL_CONCURRENCY_LIMITS"
+    MCP_PORTAL_TOOL_TIMEOUT_OVERRIDES = "MCP_PORTAL_TOOL_TIMEOUT_OVERRIDES"
+    MCP_PORTAL_TOOL_TIMEOUT_SECONDS = "MCP_PORTAL_TOOL_TIMEOUT_SECONDS"
+    OPENAI_API_KEY = "OPENAI_API_KEY"
+    OPENAI_EMBEDDING_MODEL = "OPENAI_EMBEDDING_MODEL"
+    OPENAI_LARGE_LANGUAGE_MODEL = "OPENAI_LARGE_LANGUAGE_MODEL"
+    OPENAI_SMALL_LANGUAGE_MODEL = "OPENAI_SMALL_LANGUAGE_MODEL"
+    OTEL_EXPORTER_OTLP_ENDPOINT = "OTEL_EXPORTER_OTLP_ENDPOINT"
+    OTEL_SERVICE_NAME = "OTEL_SERVICE_NAME"
+
+
+ENVIRONMENT_VARIABLE_NAMES = frozenset(variable.value for variable in EnvironmentVariable)
 
 
 @dataclass(frozen=True)
@@ -758,153 +853,24 @@ class Settings:
         load_dotenv(_resolve_env_file(env_file), override=override)
 
         return cls(
-            openai=OpenAISettings(
-                api_key=_optional_env("OPENAI_API_KEY"),
-                large_language_model=os.getenv("OPENAI_LARGE_LANGUAGE_MODEL", "gpt-5.5"),
-                small_language_model=os.getenv("OPENAI_SMALL_LANGUAGE_MODEL", "gpt-5.5-mini"),
-                embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large"),
+            openai=_openai_settings_from_env(),
+            model_provider=_model_provider_env(
+                EnvironmentVariable.MCP_PORTAL_MODEL_PROVIDER, default="openai"
             ),
-            model_provider=_model_provider_env("MCP_PORTAL_MODEL_PROVIDER", default="openai"),
-            azure_openai=AzureOpenAISettings(
-                endpoint=_optional_env("AZURE_OPENAI_ENDPOINT"),
-                api_version=_optional_env("AZURE_OPENAI_API_VERSION"),
-                token_scope=(
-                    _optional_env("AZURE_OPENAI_TOKEN_SCOPE") or DEFAULT_AZURE_OPENAI_TOKEN_SCOPE
-                ),
-                large_language_model_deployment=_optional_env(
-                    "AZURE_OPENAI_LARGE_LANGUAGE_MODEL_DEPLOYMENT"
-                ),
-                small_language_model_deployment=_optional_env(
-                    "AZURE_OPENAI_SMALL_LANGUAGE_MODEL_DEPLOYMENT"
-                ),
-                embedding_model_deployment=_optional_env("AZURE_OPENAI_EMBEDDING_MODEL_DEPLOYMENT"),
-            ),
-            azure_identity=AzureIdentitySettings(
-                tenant_id=_optional_env("AZURE_TENANT_ID"),
-                client_id=_optional_env("AZURE_CLIENT_ID"),
-                client_secret=_optional_env("AZURE_CLIENT_SECRET"),
-            ),
+            azure_openai=_azure_openai_settings_from_env(),
+            azure_identity=_azure_identity_settings_from_env(),
             health=HealthSettings(
-                enabled=_bool_env("MCP_PORTAL_HEALTH_ENABLED", default=True),
+                enabled=_bool_env(EnvironmentVariable.MCP_PORTAL_HEALTH_ENABLED, default=True),
             ),
-            auth=AuthSettings(
-                provider=_auth_provider_env("MCP_PORTAL_AUTH_PROVIDER", default="none"),
-                required_scopes=_csv_env("MCP_PORTAL_AUTH_REQUIRED_SCOPES"),
-                static_token=_optional_env("MCP_PORTAL_AUTH_STATIC_TOKEN"),
-                static_client_id=os.getenv("MCP_PORTAL_AUTH_STATIC_CLIENT_ID", "mcp-portal-static"),
-                static_scopes=_csv_env("MCP_PORTAL_AUTH_STATIC_SCOPES"),
-                jwt_public_key=_optional_env("MCP_PORTAL_AUTH_JWT_PUBLIC_KEY"),
-                jwt_jwks_uri=_optional_env("MCP_PORTAL_AUTH_JWT_JWKS_URI"),
-                jwt_issuer=_optional_env("MCP_PORTAL_AUTH_JWT_ISSUER"),
-                jwt_audience=_optional_env("MCP_PORTAL_AUTH_JWT_AUDIENCE"),
-                jwt_algorithm=os.getenv("MCP_PORTAL_AUTH_JWT_ALGORITHM", "RS256"),
-                resource_server_url=_optional_env("MCP_PORTAL_AUTH_RESOURCE_SERVER_URL"),
-                ldap_uri=_optional_env("MCP_PORTAL_AUTH_LDAP_URI"),
-                ldap_base_dn=_optional_env("MCP_PORTAL_AUTH_LDAP_BASE_DN"),
-                ldap_user_dn_template=_optional_env("MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE"),
-                ldap_search_filter=(
-                    _optional_env("MCP_PORTAL_AUTH_LDAP_SEARCH_FILTER") or "(uid={username})"
-                ),
-                ldap_bind_dn=_optional_env("MCP_PORTAL_AUTH_LDAP_BIND_DN"),
-                ldap_bind_password=_optional_env("MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD"),
-                ldap_start_tls=_bool_env("MCP_PORTAL_AUTH_LDAP_START_TLS", default=False),
-                ldap_ca_cert_file=_optional_env("MCP_PORTAL_AUTH_LDAP_CA_CERT_FILE"),
-                ldap_connect_timeout=_float_env(
-                    "MCP_PORTAL_AUTH_LDAP_CONNECT_TIMEOUT", default=5.0
-                ),
-                ldap_scopes=_csv_env("MCP_PORTAL_AUTH_LDAP_SCOPES"),
-                kerberos_hostname=_optional_env("MCP_PORTAL_AUTH_KERBEROS_HOSTNAME"),
-                kerberos_service=(_optional_env("MCP_PORTAL_AUTH_KERBEROS_SERVICE") or "HTTP"),
-                kerberos_keytab=_optional_env("MCP_PORTAL_AUTH_KERBEROS_KEYTAB"),
-                kerberos_scopes=_csv_env("MCP_PORTAL_AUTH_KERBEROS_SCOPES"),
-            ),
-            authorization=AuthorizationSettings(
-                tag_scopes=_tag_scope_env(
-                    "MCP_PORTAL_AUTHZ_TAG_SCOPES",
-                    default=DEFAULT_TAG_SCOPE_RULES,
-                ),
-                namespace_scopes=_tag_scope_env(
-                    "MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES",
-                    default={},
-                ),
-            ),
-            middleware=MiddlewareSettings(
-                enabled=_bool_env("MCP_PORTAL_MIDDLEWARE_ENABLED", default=False),
-                structured_logging=_bool_env("MCP_PORTAL_STRUCTURED_LOGGING", default=True),
-                include_payload_length=_bool_env("MCP_PORTAL_LOG_PAYLOAD_LENGTHS", default=True),
-                rate_limit_per_second=_float_env("MCP_PORTAL_RATE_LIMIT_PER_SECOND", default=25.0),
-                rate_limit_burst=_int_env("MCP_PORTAL_RATE_LIMIT_BURST", default=50),
-                response_max_bytes=_int_env("MCP_PORTAL_RESPONSE_MAX_BYTES", default=1_000_000),
-            ),
-            http=HttpSettings(
-                path=os.getenv("MCP_PORTAL_HTTP_PATH", "/mcp"),
-                health_path=os.getenv("MCP_PORTAL_HEALTH_PATH", "/healthz"),
-                readiness_path=os.getenv("MCP_PORTAL_READINESS_PATH", "/readyz"),
-                json_response=_optional_bool_env("MCP_PORTAL_JSON_RESPONSE"),
-                stateless=_optional_bool_env("MCP_PORTAL_STATELESS_HTTP"),
-            ),
-            enterprise=EnterpriseSettings(
-                require_auth=_bool_env("MCP_PORTAL_PRODUCTION_REQUIRE_AUTH", default=False),
-                require_tenant=_bool_env("MCP_PORTAL_REQUIRE_TENANT", default=False),
-                tenant_claim=(_optional_env("MCP_PORTAL_TENANT_CLAIM") or "tenant_id"),
-                audit_enabled=_bool_env("MCP_PORTAL_AUDIT_ENABLED", default=True),
-                tool_timeout_seconds=_float_env("MCP_PORTAL_TOOL_TIMEOUT_SECONDS", default=45.0),
-                tool_timeout_overrides=_number_map_env(
-                    "MCP_PORTAL_TOOL_TIMEOUT_OVERRIDES", parser=float
-                ),
-                max_concurrent_requests=_int_env("MCP_PORTAL_MAX_CONCURRENT_REQUESTS", default=100),
-                tool_concurrency_limits=_number_map_env(
-                    "MCP_PORTAL_TOOL_CONCURRENCY_LIMITS", parser=int
-                ),
-                downstream_timeout_seconds=_float_env(
-                    "MCP_PORTAL_DOWNSTREAM_TIMEOUT_SECONDS", default=45.0
-                ),
-                circuit_breaker_failure_threshold=_int_env(
-                    "MCP_PORTAL_CIRCUIT_BREAKER_FAILURE_THRESHOLD", default=5
-                ),
-                circuit_breaker_recovery_seconds=_float_env(
-                    "MCP_PORTAL_CIRCUIT_BREAKER_RECOVERY_SECONDS", default=30.0
-                ),
-                task_max_ttl_seconds=_int_env("MCP_PORTAL_TASK_MAX_TTL_SECONDS", default=3600),
-                task_max_concurrent_per_subject=_int_env(
-                    "MCP_PORTAL_TASK_MAX_CONCURRENT_PER_SUBJECT", default=10
-                ),
-                egress_allowed_hosts=_csv_env("MCP_PORTAL_EGRESS_ALLOWED_HOSTS"),
-                namespace_allowlist=_csv_env("MCP_PORTAL_NAMESPACE_ALLOWLIST"),
-            ),
-            namespace_discovery=NamespaceDiscoverySettings(
-                strict=_bool_env("MCP_PORTAL_NAMESPACE_DISCOVERY_STRICT", default=False),
-            ),
-            observability=ObservabilitySettings(
-                service_name=os.getenv("OTEL_SERVICE_NAME", "mcp-portal"),
-                otlp_endpoint=_optional_env("OTEL_EXPORTER_OTLP_ENDPOINT"),
-                metrics_enabled=_bool_env("MCP_PORTAL_METRICS_ENABLED", default=True),
-                cost_accounting_enabled=_bool_env(
-                    "MCP_PORTAL_COST_ACCOUNTING_ENABLED", default=True
-                ),
-                include_tenant_metrics=_bool_env(
-                    "MCP_PORTAL_METRICS_INCLUDE_TENANT", default=False
-                ),
-                cost_currency=(_optional_env("MCP_PORTAL_COST_CURRENCY") or "USD").upper(),
-                pricing_version=_optional_env("MCP_PORTAL_PRICING_VERSION"),
-            ),
-            database=DatabaseSettings(
-                provider=_database_provider_env("MCP_PORTAL_DATABASE_PROVIDER", default="oracle"),
-                sqlalchemy_url=_optional_env("MCP_PORTAL_DATABASE_SQLALCHEMY_URL"),
-                oracle_dsn=_optional_env("MCP_PORTAL_ORACLE_DSN"),
-                oracle_user=_optional_env("MCP_PORTAL_ORACLE_USER"),
-                oracle_password=_optional_env("MCP_PORTAL_ORACLE_PASSWORD"),
-                oracle_pool_min=_int_env("MCP_PORTAL_ORACLE_POOL_MIN", default=1),
-                oracle_pool_max=_int_env("MCP_PORTAL_ORACLE_POOL_MAX", default=4),
-            ),
-            mongodb=MongoDBSettings(
-                connection_string=_optional_env("MCP_PORTAL_MONGODB_CONNECTION_STRING"),
-                database_name=_optional_env("MCP_PORTAL_MONGODB_DATABASE"),
-                vector_search_index=(
-                    _optional_env("MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX")
-                    or DEFAULT_MONGODB_VECTOR_INDEX
-                ),
-            ),
+            auth=_auth_settings_from_env(),
+            authorization=_authorization_settings_from_env(),
+            middleware=_middleware_settings_from_env(),
+            http=_http_settings_from_env(),
+            enterprise=_enterprise_settings_from_env(),
+            namespace_discovery=_namespace_discovery_settings_from_env(),
+            observability=_observability_settings_from_env(),
+            database=_database_settings_from_env(),
+            mongodb=_mongodb_settings_from_env(),
         )
 
     @property
@@ -1023,6 +989,18 @@ class Settings:
         """Reject unsafe combinations when hardened production mode is requested."""
         from mcp_portal.errors import ConfigurationPortalError
 
+        problems = [*self._production_auth_problems(), *self._production_runtime_problems()]
+        if problems:
+            raise ConfigurationPortalError(
+                "Production configuration is unsafe.", details={"problems": problems}
+            )
+
+    def _production_auth_problems(self) -> list[str]:
+        """Return unsafe production authentication settings.
+
+        Returns:
+            Human-readable authentication configuration problems.
+        """
         problems: list[str] = []
         if self.enterprise.require_auth and not self.auth.enabled:
             problems.append("authentication is required but no provider is configured")
@@ -1039,11 +1017,24 @@ class Settings:
 
         if self.auth.resource_server_url:
             parsed = urlsplit(self.auth.resource_server_url)
-            is_loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                 problems.append("resource server URL must be an absolute HTTP(S) URL")
-            elif parsed.scheme != "https" and not is_loopback:
+            elif parsed.scheme != "https" and parsed.hostname not in {
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            }:
                 problems.append("resource server URL must use HTTPS outside loopback")
+
+        return problems
+
+    def _production_runtime_problems(self) -> list[str]:
+        """Return unsafe production execution-control settings.
+
+        Returns:
+            Human-readable runtime configuration problems.
+        """
+        problems: list[str] = []
 
         if self.enterprise.tool_timeout_seconds <= 0:
             problems.append("tool timeout must be positive")
@@ -1060,10 +1051,7 @@ class Settings:
         if self.enterprise.circuit_breaker_recovery_seconds <= 0:
             problems.append("circuit-breaker recovery time must be positive")
 
-        if problems:
-            raise ConfigurationPortalError(
-                "Production configuration is unsafe.", details={"problems": problems}
-            )
+        return problems
 
     def public_snapshot(self) -> dict[str, dict[str, object]]:
         """Return non-secret settings safe to expose through development tools.
@@ -1072,7 +1060,16 @@ class Settings:
             Grouped public runtime settings.
         """
         return {
-            "model_provider": self._model_provider_public_snapshot(),
+            "model_provider": {
+                "provider": self.model_provider,
+                "configured": self.model_provider_configured,
+                "auth_mode": (
+                    "azure_identity" if self.model_provider == "azure_openai" else "api_key"
+                ),
+                "large_language_model": self.large_language_model,
+                "small_language_model": self.small_language_model,
+                "embedding_model": self.embedding_model,
+            },
             "openai": self.openai.public_snapshot(),
             "azure_openai": self.azure_openai.public_snapshot(),
             "azure_identity": self.azure_identity.public_snapshot(),
@@ -1088,20 +1085,278 @@ class Settings:
             "mongodb": self.mongodb.public_snapshot(),
         }
 
-    def _model_provider_public_snapshot(self) -> dict[str, object]:
-        """Return active model provider settings safe to expose publicly.
 
-        Returns:
-            Generic model-provider metadata with provider-specific secrets omitted.
-        """
-        return {
-            "provider": self.model_provider,
-            "configured": self.model_provider_configured,
-            "auth_mode": "azure_identity" if self.model_provider == "azure_openai" else "api_key",
-            "large_language_model": self.large_language_model,
-            "small_language_model": self.small_language_model,
-            "embedding_model": self.embedding_model,
-        }
+def _openai_settings_from_env() -> OpenAISettings:
+    """Build direct OpenAI settings from the environment.
+
+    Returns:
+        Direct OpenAI provider settings.
+    """
+    return OpenAISettings(
+        api_key=_optional_env(EnvironmentVariable.OPENAI_API_KEY),
+        large_language_model=os.getenv(EnvironmentVariable.OPENAI_LARGE_LANGUAGE_MODEL, "gpt-5.5"),
+        small_language_model=os.getenv(
+            EnvironmentVariable.OPENAI_SMALL_LANGUAGE_MODEL, "gpt-5.5-mini"
+        ),
+        embedding_model=os.getenv(
+            EnvironmentVariable.OPENAI_EMBEDDING_MODEL, "text-embedding-3-large"
+        ),
+    )
+
+
+def _azure_openai_settings_from_env() -> AzureOpenAISettings:
+    """Build Azure OpenAI settings from the environment.
+
+    Returns:
+        Azure OpenAI provider settings.
+    """
+    return AzureOpenAISettings(
+        endpoint=_optional_env(EnvironmentVariable.AZURE_OPENAI_ENDPOINT),
+        api_version=_optional_env(EnvironmentVariable.AZURE_OPENAI_API_VERSION),
+        token_scope=(
+            _optional_env(EnvironmentVariable.AZURE_OPENAI_TOKEN_SCOPE)
+            or DEFAULT_AZURE_OPENAI_TOKEN_SCOPE
+        ),
+        large_language_model_deployment=_optional_env(
+            EnvironmentVariable.AZURE_OPENAI_LARGE_LANGUAGE_MODEL_DEPLOYMENT
+        ),
+        small_language_model_deployment=_optional_env(
+            EnvironmentVariable.AZURE_OPENAI_SMALL_LANGUAGE_MODEL_DEPLOYMENT
+        ),
+        embedding_model_deployment=_optional_env(
+            EnvironmentVariable.AZURE_OPENAI_EMBEDDING_MODEL_DEPLOYMENT
+        ),
+    )
+
+
+def _azure_identity_settings_from_env() -> AzureIdentitySettings:
+    """Build Azure identity settings from the environment.
+
+    Returns:
+        Azure identity settings.
+    """
+    return AzureIdentitySettings(
+        tenant_id=_optional_env(EnvironmentVariable.AZURE_TENANT_ID),
+        client_id=_optional_env(EnvironmentVariable.AZURE_CLIENT_ID),
+        client_secret=_optional_env(EnvironmentVariable.AZURE_CLIENT_SECRET),
+    )
+
+
+def _auth_settings_from_env() -> AuthSettings:
+    """Build authentication settings from the environment.
+
+    Returns:
+        Portal authentication settings.
+    """
+    return AuthSettings(
+        provider=_auth_provider_env(EnvironmentVariable.MCP_PORTAL_AUTH_PROVIDER, default="none"),
+        required_scopes=_csv_env(EnvironmentVariable.MCP_PORTAL_AUTH_REQUIRED_SCOPES),
+        static_token=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_STATIC_TOKEN),
+        static_client_id=os.getenv(
+            EnvironmentVariable.MCP_PORTAL_AUTH_STATIC_CLIENT_ID, "mcp-portal-static"
+        ),
+        static_scopes=_csv_env(EnvironmentVariable.MCP_PORTAL_AUTH_STATIC_SCOPES),
+        jwt_public_key=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_JWT_PUBLIC_KEY),
+        jwt_jwks_uri=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_JWT_JWKS_URI),
+        jwt_issuer=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_JWT_ISSUER),
+        jwt_audience=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_JWT_AUDIENCE),
+        jwt_algorithm=os.getenv(EnvironmentVariable.MCP_PORTAL_AUTH_JWT_ALGORITHM, "RS256"),
+        resource_server_url=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_RESOURCE_SERVER_URL),
+        ldap_uri=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_URI),
+        ldap_base_dn=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_BASE_DN),
+        ldap_user_dn_template=_optional_env(
+            EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE
+        ),
+        ldap_search_filter=(
+            _optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_SEARCH_FILTER)
+            or "(uid={username})"
+        ),
+        ldap_bind_dn=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_BIND_DN),
+        ldap_bind_password=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD),
+        ldap_start_tls=_bool_env(EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_START_TLS, default=False),
+        ldap_ca_cert_file=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_CA_CERT_FILE),
+        ldap_connect_timeout=_float_env(
+            EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_CONNECT_TIMEOUT, default=5.0
+        ),
+        ldap_scopes=_csv_env(EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_SCOPES),
+        kerberos_hostname=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_KERBEROS_HOSTNAME),
+        kerberos_service=(
+            _optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_KERBEROS_SERVICE) or "HTTP"
+        ),
+        kerberos_keytab=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_KERBEROS_KEYTAB),
+        kerberos_scopes=_csv_env(EnvironmentVariable.MCP_PORTAL_AUTH_KERBEROS_SCOPES),
+    )
+
+
+def _authorization_settings_from_env() -> AuthorizationSettings:
+    """Build authorization settings from the environment.
+
+    Returns:
+        Portal authorization settings.
+    """
+    return AuthorizationSettings(
+        tag_scopes=_tag_scope_env(
+            EnvironmentVariable.MCP_PORTAL_AUTHZ_TAG_SCOPES,
+            default=DEFAULT_TAG_SCOPE_RULES,
+        ),
+        namespace_scopes=_tag_scope_env(
+            EnvironmentVariable.MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES,
+            default={},
+        ),
+    )
+
+
+def _middleware_settings_from_env() -> MiddlewareSettings:
+    """Build middleware settings from the environment.
+
+    Returns:
+        Portal middleware settings.
+    """
+    return MiddlewareSettings(
+        enabled=_bool_env(EnvironmentVariable.MCP_PORTAL_MIDDLEWARE_ENABLED, default=False),
+        structured_logging=_bool_env(
+            EnvironmentVariable.MCP_PORTAL_STRUCTURED_LOGGING, default=True
+        ),
+        include_payload_length=_bool_env(
+            EnvironmentVariable.MCP_PORTAL_LOG_PAYLOAD_LENGTHS, default=True
+        ),
+        rate_limit_per_second=_float_env(
+            EnvironmentVariable.MCP_PORTAL_RATE_LIMIT_PER_SECOND, default=25.0
+        ),
+        rate_limit_burst=_int_env(EnvironmentVariable.MCP_PORTAL_RATE_LIMIT_BURST, default=50),
+        response_max_bytes=_int_env(
+            EnvironmentVariable.MCP_PORTAL_RESPONSE_MAX_BYTES, default=1_000_000
+        ),
+    )
+
+
+def _http_settings_from_env() -> HttpSettings:
+    """Build HTTP transport settings from the environment.
+
+    Returns:
+        Portal HTTP settings.
+    """
+    return HttpSettings(
+        path=os.getenv(EnvironmentVariable.MCP_PORTAL_HTTP_PATH, "/mcp"),
+        health_path=os.getenv(EnvironmentVariable.MCP_PORTAL_HEALTH_PATH, "/healthz"),
+        readiness_path=os.getenv(EnvironmentVariable.MCP_PORTAL_READINESS_PATH, "/readyz"),
+        json_response=_optional_bool_env(EnvironmentVariable.MCP_PORTAL_JSON_RESPONSE),
+        stateless=_optional_bool_env(EnvironmentVariable.MCP_PORTAL_STATELESS_HTTP),
+    )
+
+
+def _enterprise_settings_from_env() -> EnterpriseSettings:
+    """Build enterprise execution settings from the environment.
+
+    Returns:
+        Portal enterprise settings.
+    """
+    return EnterpriseSettings(
+        require_auth=_bool_env(
+            EnvironmentVariable.MCP_PORTAL_PRODUCTION_REQUIRE_AUTH, default=False
+        ),
+        require_tenant=_bool_env(EnvironmentVariable.MCP_PORTAL_REQUIRE_TENANT, default=False),
+        tenant_claim=(_optional_env(EnvironmentVariable.MCP_PORTAL_TENANT_CLAIM) or "tenant_id"),
+        audit_enabled=_bool_env(EnvironmentVariable.MCP_PORTAL_AUDIT_ENABLED, default=True),
+        tool_timeout_seconds=_float_env(
+            EnvironmentVariable.MCP_PORTAL_TOOL_TIMEOUT_SECONDS, default=45.0
+        ),
+        tool_timeout_overrides=_number_map_env(
+            EnvironmentVariable.MCP_PORTAL_TOOL_TIMEOUT_OVERRIDES, parser=float
+        ),
+        max_concurrent_requests=_int_env(
+            EnvironmentVariable.MCP_PORTAL_MAX_CONCURRENT_REQUESTS, default=100
+        ),
+        tool_concurrency_limits=_number_map_env(
+            EnvironmentVariable.MCP_PORTAL_TOOL_CONCURRENCY_LIMITS, parser=int
+        ),
+        downstream_timeout_seconds=_float_env(
+            EnvironmentVariable.MCP_PORTAL_DOWNSTREAM_TIMEOUT_SECONDS, default=45.0
+        ),
+        circuit_breaker_failure_threshold=_int_env(
+            EnvironmentVariable.MCP_PORTAL_CIRCUIT_BREAKER_FAILURE_THRESHOLD, default=5
+        ),
+        circuit_breaker_recovery_seconds=_float_env(
+            EnvironmentVariable.MCP_PORTAL_CIRCUIT_BREAKER_RECOVERY_SECONDS, default=30.0
+        ),
+        task_max_ttl_seconds=_int_env(
+            EnvironmentVariable.MCP_PORTAL_TASK_MAX_TTL_SECONDS, default=3600
+        ),
+        task_max_concurrent_per_subject=_int_env(
+            EnvironmentVariable.MCP_PORTAL_TASK_MAX_CONCURRENT_PER_SUBJECT, default=10
+        ),
+        egress_allowed_hosts=_csv_env(EnvironmentVariable.MCP_PORTAL_EGRESS_ALLOWED_HOSTS),
+        namespace_allowlist=_csv_env(EnvironmentVariable.MCP_PORTAL_NAMESPACE_ALLOWLIST),
+    )
+
+
+def _namespace_discovery_settings_from_env() -> NamespaceDiscoverySettings:
+    """Build namespace-discovery settings from the environment.
+
+    Returns:
+        Namespace discovery settings.
+    """
+    return NamespaceDiscoverySettings(
+        strict=_bool_env(EnvironmentVariable.MCP_PORTAL_NAMESPACE_DISCOVERY_STRICT, default=False)
+    )
+
+
+def _observability_settings_from_env() -> ObservabilitySettings:
+    """Build observability settings from the environment.
+
+    Returns:
+        Portal observability settings.
+    """
+    return ObservabilitySettings(
+        service_name=os.getenv(EnvironmentVariable.OTEL_SERVICE_NAME, "mcp-portal"),
+        otlp_endpoint=_optional_env(EnvironmentVariable.OTEL_EXPORTER_OTLP_ENDPOINT),
+        metrics_enabled=_bool_env(EnvironmentVariable.MCP_PORTAL_METRICS_ENABLED, default=True),
+        cost_accounting_enabled=_bool_env(
+            EnvironmentVariable.MCP_PORTAL_COST_ACCOUNTING_ENABLED, default=True
+        ),
+        include_tenant_metrics=_bool_env(
+            EnvironmentVariable.MCP_PORTAL_METRICS_INCLUDE_TENANT, default=False
+        ),
+        cost_currency=(
+            _optional_env(EnvironmentVariable.MCP_PORTAL_COST_CURRENCY) or "USD"
+        ).upper(),
+        pricing_version=_optional_env(EnvironmentVariable.MCP_PORTAL_PRICING_VERSION),
+    )
+
+
+def _database_settings_from_env() -> DatabaseSettings:
+    """Build relational database settings from the environment.
+
+    Returns:
+        Portal relational database settings.
+    """
+    return DatabaseSettings(
+        provider=_database_provider_env(
+            EnvironmentVariable.MCP_PORTAL_DATABASE_PROVIDER, default="oracle"
+        ),
+        sqlalchemy_url=_optional_env(EnvironmentVariable.MCP_PORTAL_DATABASE_SQLALCHEMY_URL),
+        oracle_dsn=_optional_env(EnvironmentVariable.MCP_PORTAL_ORACLE_DSN),
+        oracle_user=_optional_env(EnvironmentVariable.MCP_PORTAL_ORACLE_USER),
+        oracle_password=_optional_env(EnvironmentVariable.MCP_PORTAL_ORACLE_PASSWORD),
+        oracle_pool_min=_int_env(EnvironmentVariable.MCP_PORTAL_ORACLE_POOL_MIN, default=1),
+        oracle_pool_max=_int_env(EnvironmentVariable.MCP_PORTAL_ORACLE_POOL_MAX, default=4),
+    )
+
+
+def _mongodb_settings_from_env() -> MongoDBSettings:
+    """Build MongoDB connector settings from the environment.
+
+    Returns:
+        Portal MongoDB settings.
+    """
+    return MongoDBSettings(
+        connection_string=_optional_env(EnvironmentVariable.MCP_PORTAL_MONGODB_CONNECTION_STRING),
+        database_name=_optional_env(EnvironmentVariable.MCP_PORTAL_MONGODB_DATABASE),
+        vector_search_index=(
+            _optional_env(EnvironmentVariable.MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX)
+            or DEFAULT_MONGODB_VECTOR_INDEX
+        ),
+    )
 
 
 def _resolve_env_file(env_file: str | Path | None) -> Path:

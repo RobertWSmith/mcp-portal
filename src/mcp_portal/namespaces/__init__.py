@@ -6,7 +6,6 @@ import pkgutil
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Any, Literal
 
 from mcp.types import Annotations, Icon, ToolAnnotations
@@ -19,7 +18,7 @@ from mcp_portal.observability import create_telemetry_recorder
 from mcp_portal.redaction import Redactor
 from mcp_portal.security import InvocationContext, current_invocation
 from mcp_portal.tasks import MemoryTaskStore
-from mcp_portal.telemetry import TelemetryRecorder, UsageRecord
+from mcp_portal.telemetry import TelemetryRecorder, UsageMeasurement, UsageRecord
 from mcp_portal.tenancy import (
     TenantMongoDBConnectors,
     TenantScope,
@@ -29,7 +28,6 @@ from mcp_portal.tenancy import (
 
 Clock = Callable[[], datetime]
 NamespaceHealthCheck = Callable[["NamespaceContext"], "NamespaceStatus"]
-NamespaceDebugFactory = Callable[["NamespaceContext"], "NamespaceDebugPanel"]
 NamespaceState = Literal["ok", "warning", "error", "disabled"]
 
 
@@ -119,8 +117,9 @@ class NamespaceContext:
         Returns:
             Tenant-safe MongoDB connector façade.
         """
-        connectors = self.clients.create("langchain_mongodb", namespace=self.name)
-        return TenantMongoDBConnectors(connectors, self.tenant_scope())
+        return TenantMongoDBConnectors(
+            self.clients.create("langchain_mongodb", namespace=self.name), self.tenant_scope()
+        )
 
     def outbound_url(self, url: str) -> str:
         """Validate an outbound URL against the namespace egress policy.
@@ -142,8 +141,9 @@ class NamespaceContext:
         Returns:
             Broker-issued downstream credential.
         """
-        approved_audience = self.outbound_url(audience)
-        return await self.credentials.credential_for(self.invocation().identity, approved_audience)
+        return await self.credentials.credential_for(
+            self.invocation().identity, self.outbound_url(audience)
+        )
 
     async def downstream(
         self,
@@ -170,45 +170,32 @@ class NamespaceContext:
 
     async def record_usage(
         self,
-        *,
-        provider: str,
-        service: str,
-        operation: str,
-        quantity: int | float | Decimal | str,
-        unit: str,
-        sku: str | None = None,
-        estimated_cost: int | float | Decimal | str | None = None,
-        currency: str | None = None,
-        pricing_version: str | None = None,
+        measurement: UsageMeasurement,
     ) -> UsageRecord:
         """Capture tenant-scoped usage and estimated cost for this invocation.
 
         Args:
-            provider: External provider or internal cost center.
-            service: Metered service or product family.
-            operation: Low-cardinality operation name.
-            quantity: Consumed quantity.
-            unit: Unit such as input_token, request, document, or compute_second.
-            sku: Optional model, deployment, or provider SKU.
-            estimated_cost: Optional estimated monetary cost.
-            currency: Optional currency override.
-            pricing_version: Optional pricing table or contract version override.
+            measurement: Namespace-reported usage fields.
 
         Returns:
             The immutable usage record sent to telemetry sinks.
         """
         record = UsageRecord.create(
             self.invocation(),
-            self.name,
-            provider=provider,
-            service=service,
-            operation=operation,
-            quantity=quantity,
-            unit=unit,
-            sku=sku,
-            estimated_cost=estimated_cost,
-            currency=currency or self.settings.observability.cost_currency,
-            pricing_version=pricing_version or self.settings.observability.pricing_version,
+            UsageMeasurement(
+                namespace=self.name,
+                provider=measurement.provider,
+                service=measurement.service,
+                operation=measurement.operation,
+                quantity=measurement.quantity,
+                unit=measurement.unit,
+                sku=measurement.sku,
+                estimated_cost=measurement.estimated_cost,
+                currency=measurement.currency or self.settings.observability.cost_currency,
+                pricing_version=(
+                    measurement.pricing_version or self.settings.observability.pricing_version
+                ),
+            ),
         )
         await self.telemetry.record_usage(record)
         return record
@@ -340,7 +327,7 @@ class NamespaceProvider:
         """
         return tuple(self._prompts)
 
-    def tool(
+    def tool(  # noqa: PLR0913 - declarative API mirrors MCP tool fields
         self,
         name: str | None = None,
         *,
@@ -391,7 +378,7 @@ class NamespaceProvider:
 
         return decorator
 
-    def resource(
+    def resource(  # noqa: PLR0913 - declarative API mirrors MCP resource fields
         self,
         uri: str,
         *,
@@ -526,40 +513,6 @@ class NamespaceStatus:
 
 
 @dataclass(frozen=True)
-class NamespaceDebugPanel:
-    """Debug payload contributed by a namespace.
-
-    Attributes:
-        title: Display title for the debug panel.
-        summary: Short human-readable panel summary.
-        snapshot: Namespace-specific diagnostic payload.
-    """
-
-    title: str
-    summary: str
-    snapshot: Mapping[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        """Normalize debug snapshots after dataclass initialization."""
-        object.__setattr__(self, "snapshot", dict(self.snapshot))
-
-    def to_public_dict(self, redactor: Redactor) -> dict[str, Any]:
-        """Return this debug panel as a redacted dictionary.
-
-        Args:
-            redactor: Redactor used for diagnostic payloads.
-
-        Returns:
-            Public debug panel metadata.
-        """
-        return {
-            "title": self.title,
-            "summary": self.summary,
-            "snapshot": redactor.redact(self.snapshot),
-        }
-
-
-@dataclass(frozen=True)
 class Namespace:
     """Definition for a mounted FastMCP namespace.
 
@@ -569,7 +522,6 @@ class Namespace:
         description: Human-readable namespace purpose.
         tags: Stable metadata tags for filtering and documentation.
         health_check: Optional callback that reports namespace status.
-        debug: Optional callback that contributes namespace debug details.
     """
 
     name: str
@@ -577,7 +529,6 @@ class Namespace:
     description: str = ""
     tags: frozenset[str] = field(default_factory=frozenset)
     health_check: NamespaceHealthCheck | None = None
-    debug: NamespaceDebugFactory | None = None
     owner: str = "platform"
     version: str = "1.0.0"
     maturity: Literal["experimental", "beta", "stable", "deprecated"] = "stable"
@@ -595,6 +546,70 @@ class Namespace:
         object.__setattr__(self, "dependencies", tuple(self.dependencies))
         if not self.name or not self.name.replace("_", "").isalnum():
             raise ValueError(f"Invalid namespace name {self.name!r}")
+
+
+@dataclass(frozen=True)
+class NamespaceMetadata:
+    """Metadata supplied when registering a namespace factory.
+
+    Attributes:
+        name: Prefix used when mounting the namespace.
+        description: Human-readable namespace purpose.
+        tags: Stable metadata tags.
+        health_check: Optional namespace health callback.
+        owner: Owning team or service.
+        version: Namespace contract version.
+        maturity: Namespace lifecycle maturity.
+        data_classification: Highest expected data classification.
+        required_scopes: Code-owned baseline access scopes.
+        timeout_seconds: Optional namespace timeout metadata.
+        dependencies: Registered external dependency names.
+        deprecation_date: Optional planned deprecation date.
+        replacement: Optional replacement namespace name.
+    """
+
+    name: str
+    description: str = ""
+    tags: frozenset[str] = field(default_factory=frozenset)
+    health_check: NamespaceHealthCheck | None = None
+    owner: str = "platform"
+    version: str = "1.0.0"
+    maturity: Literal["experimental", "beta", "stable", "deprecated"] = "stable"
+    data_classification: str = "internal"
+    required_scopes: frozenset[str] = field(default_factory=frozenset)
+    timeout_seconds: float | None = None
+    dependencies: tuple[str, ...] = ()
+    deprecation_date: str | None = None
+    replacement: str | None = None
+
+    def __post_init__(self) -> None:
+        """Normalize iterable metadata after dataclass initialization."""
+        object.__setattr__(self, "tags", frozenset(self.tags))
+        object.__setattr__(self, "required_scopes", frozenset(self.required_scopes))
+        object.__setattr__(self, "dependencies", tuple(self.dependencies))
+
+
+@dataclass(frozen=True)
+class NamespaceDependencies:
+    """Shared services used to build namespace runtime contexts.
+
+    Attributes:
+        clients: Shared external client registry.
+        redactor: Shared diagnostic redactor.
+        clock: Optional namespace clock.
+        egress: Shared outbound destination policy.
+        credentials: Shared downstream credential broker.
+        tasks: Shared authorization-bound task store.
+        telemetry: Shared telemetry recorder.
+    """
+
+    clients: ClientFactories | None = None
+    redactor: Redactor | None = None
+    clock: Clock | None = None
+    egress: EgressPolicy | None = None
+    credentials: CredentialBroker | None = None
+    tasks: MemoryTaskStore | None = None
+    telemetry: TelemetryRecorder | None = None
 
 
 @dataclass(frozen=True)
@@ -616,34 +631,18 @@ _DISCOVERED = False
 
 
 def register_namespace(
-    name: str,
-    *,
-    description: str = "",
-    tags: Iterable[str] = (),
-    health_check: NamespaceHealthCheck | None = None,
-    debug: NamespaceDebugFactory | None = None,
-    owner: str = "platform",
-    version: str = "1.0.0",
-    maturity: Literal["experimental", "beta", "stable", "deprecated"] = "stable",
-    data_classification: str = "internal",
-    required_scopes: Iterable[str] = (),
-    timeout_seconds: float | None = None,
-    dependencies: Iterable[str] = (),
-    deprecation_date: str | None = None,
-    replacement: str | None = None,
+    metadata: NamespaceMetadata | str,
 ) -> Callable[[NamespaceFactory], NamespaceFactory]:
     """Create a decorator that registers a default namespace factory.
 
     Args:
-        name: Prefix used when mounting the namespace into the parent server.
-        description: Human-readable namespace purpose.
-        tags: Stable metadata tags for filtering and documentation.
-        health_check: Optional callback that reports namespace status.
-        debug: Optional callback that contributes namespace debug details.
+        metadata: Namespace metadata, or a name for a default metadata record.
 
     Returns:
         A decorator that records the namespace manifest and returns the factory unchanged.
     """
+
+    definition = NamespaceMetadata(metadata) if isinstance(metadata, str) else metadata
 
     def decorator(create: NamespaceFactory) -> NamespaceFactory:
         """Register the decorated factory in the default namespace registry.
@@ -657,26 +656,25 @@ def register_namespace(
         Raises:
             ValueError: If another factory has already registered the same namespace name.
         """
-        existing = _NAMESPACE_REGISTRY.get(name)
+        existing = _NAMESPACE_REGISTRY.get(definition.name)
         if existing is not None and existing.create is not create:
-            raise ValueError(f"Namespace {name!r} is already registered")
+            raise ValueError(f"Namespace {definition.name!r} is already registered")
 
-        _NAMESPACE_REGISTRY[name] = Namespace(
-            name=name,
+        _NAMESPACE_REGISTRY[definition.name] = Namespace(
+            name=definition.name,
             create=create,
-            description=description,
-            tags=frozenset(tags),
-            health_check=health_check,
-            debug=debug,
-            owner=owner,
-            version=version,
-            maturity=maturity,
-            data_classification=data_classification,
-            required_scopes=frozenset(required_scopes),
-            timeout_seconds=timeout_seconds,
-            dependencies=tuple(dependencies),
-            deprecation_date=deprecation_date,
-            replacement=replacement,
+            description=definition.description,
+            tags=definition.tags,
+            health_check=definition.health_check,
+            owner=definition.owner,
+            version=definition.version,
+            maturity=definition.maturity,
+            data_classification=definition.data_classification,
+            required_scopes=definition.required_scopes,
+            timeout_seconds=definition.timeout_seconds,
+            dependencies=definition.dependencies,
+            deprecation_date=definition.deprecation_date,
+            replacement=definition.replacement,
         )
         return create
 
@@ -686,33 +684,21 @@ def register_namespace(
 def build_namespace_runtimes(
     namespaces: Sequence[Namespace],
     settings: Settings,
-    *,
-    clients: ClientFactories | None = None,
-    redactor: Redactor | None = None,
-    clock: Clock | None = None,
-    egress: EgressPolicy | None = None,
-    credentials: CredentialBroker | None = None,
-    tasks: MemoryTaskStore | None = None,
-    telemetry: TelemetryRecorder | None = None,
+    dependencies: NamespaceDependencies | None = None,
 ) -> tuple[NamespaceRuntime, ...]:
     """Build runtime contexts for a group of namespaces.
 
     Args:
         namespaces: Namespace manifests to prepare.
         settings: Runtime settings shared by namespaces.
-        clients: Optional shared client factory registry.
-        redactor: Optional shared redactor.
-        clock: Optional shared clock.
-        egress: Optional shared outbound destination policy.
-        credentials: Optional shared downstream credential broker.
-        tasks: Optional shared authorization-bound task store.
-        telemetry: Optional shared metrics and cost-accounting recorder.
+        dependencies: Optional shared namespace service adapters.
 
     Returns:
         Runtime objects ready for mounting and diagnostics.
     """
-    shared_clients = clients or default_client_factories(settings)
-    shared_redactor = redactor or Redactor.from_secrets(
+    dependencies = dependencies or NamespaceDependencies()
+    shared_clients = dependencies.clients or default_client_factories(settings)
+    shared_redactor = dependencies.redactor or Redactor.from_secrets(
         (
             settings.openai.api_key,
             settings.azure_identity.client_secret,
@@ -724,15 +710,24 @@ def build_namespace_runtimes(
             settings.mongodb.connection_string,
         )
     )
-    shared_egress = egress or EgressPolicy(
+    shared_egress = dependencies.egress or EgressPolicy(
         allowed_hosts=frozenset(host.lower() for host in settings.enterprise.egress_allowed_hosts)
     )
-    shared_credentials = credentials or RejectingCredentialBroker()
-    shared_tasks = tasks or MemoryTaskStore(
+    shared_credentials = dependencies.credentials or RejectingCredentialBroker()
+    shared_tasks = dependencies.tasks or MemoryTaskStore(
         max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
         max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
     )
-    shared_telemetry = telemetry or create_telemetry_recorder(settings)
+    shared_telemetry = dependencies.telemetry or create_telemetry_recorder(settings)
+    runtime_dependencies = NamespaceDependencies(
+        clients=shared_clients,
+        redactor=shared_redactor,
+        clock=dependencies.clock,
+        egress=shared_egress,
+        credentials=shared_credentials,
+        tasks=shared_tasks,
+        telemetry=shared_telemetry,
+    )
 
     return tuple(
         NamespaceRuntime(
@@ -740,13 +735,7 @@ def build_namespace_runtimes(
             context=build_namespace_context(
                 namespace,
                 settings,
-                clients=shared_clients,
-                redactor=shared_redactor,
-                clock=clock,
-                egress=shared_egress,
-                credentials=shared_credentials,
-                tasks=shared_tasks,
-                telemetry=shared_telemetry,
+                runtime_dependencies,
             ),
         )
         for namespace in namespaces
@@ -756,27 +745,14 @@ def build_namespace_runtimes(
 def build_namespace_context(
     namespace: Namespace,
     settings: Settings,
-    *,
-    clients: ClientFactories,
-    redactor: Redactor,
-    clock: Clock | None = None,
-    egress: EgressPolicy | None = None,
-    credentials: CredentialBroker | None = None,
-    tasks: MemoryTaskStore | None = None,
-    telemetry: TelemetryRecorder | None = None,
+    dependencies: NamespaceDependencies,
 ) -> NamespaceContext:
     """Build the runtime context for one namespace.
 
     Args:
         namespace: Namespace manifest.
         settings: Runtime settings shared by namespaces.
-        clients: Shared client factory registry.
-        redactor: Shared diagnostic redactor.
-        clock: Optional namespace clock.
-        egress: Optional outbound destination policy.
-        credentials: Optional downstream credential broker.
-        tasks: Optional authorization-bound task store.
-        telemetry: Optional metrics and cost-accounting recorder.
+        dependencies: Shared namespace service adapters.
 
     Returns:
         A namespace-scoped runtime context.
@@ -785,17 +761,17 @@ def build_namespace_context(
         name=namespace.name,
         settings=settings,
         logger=logging.getLogger(f"mcp_portal.namespaces.{namespace.name}"),
-        redactor=redactor,
-        clients=clients,
-        clock=clock or utc_now,
-        egress=egress or EgressPolicy(),
-        credentials=credentials or RejectingCredentialBroker(),
-        tasks=tasks
+        redactor=dependencies.redactor or Redactor(),
+        clients=dependencies.clients or default_client_factories(settings),
+        clock=dependencies.clock or utc_now,
+        egress=dependencies.egress or EgressPolicy(),
+        credentials=dependencies.credentials or RejectingCredentialBroker(),
+        tasks=dependencies.tasks
         or MemoryTaskStore(
             max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
             max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
         ),
-        telemetry=telemetry or create_telemetry_recorder(settings),
+        telemetry=dependencies.telemetry or create_telemetry_recorder(settings),
     )
 
 

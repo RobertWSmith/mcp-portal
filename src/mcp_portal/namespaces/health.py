@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mcp_portal.namespaces import (
     NamespaceContext,
-    NamespaceDebugPanel,
+    NamespaceMetadata,
     NamespaceProvider,
     NamespaceStatus,
     register_namespace,
@@ -86,36 +86,17 @@ def health_status(context: NamespaceContext) -> NamespaceStatus:
     )
 
 
-def health_debug_panel(context: NamespaceContext) -> NamespaceDebugPanel:
-    """Build health namespace diagnostics for the central debug UI.
-
-    Args:
-        context: Runtime services shared with the health namespace.
-
-    Returns:
-        Debug metadata for health namespace tools and settings.
-    """
-    return NamespaceDebugPanel(
-        title="Health Namespace",
-        summary="Liveness and public runtime configuration tools.",
-        snapshot={
-            "namespace": context.name,
-            "tools": ["ping", "runtime_config"],
-            "settings": context.settings.health.public_snapshot(),
-        },
-    )
-
-
 @register_namespace(
-    "health",
-    description="Liveness checks and non-secret runtime configuration metadata.",
-    tags={"core", "health", "readonly"},
-    health_check=health_status,
-    debug=health_debug_panel,
-    owner="platform-engineering",
-    version="1.0.0",
-    maturity="stable",
-    data_classification="internal",
+    NamespaceMetadata(
+        name="health",
+        description="Liveness checks and non-secret runtime configuration metadata.",
+        tags=frozenset({"core", "health", "readonly"}),
+        health_check=health_status,
+        owner="platform-engineering",
+        version="1.0.0",
+        maturity="stable",
+        data_classification="internal",
+    )
 )
 def create_provider(context: NamespaceContext) -> NamespaceProvider:
     """Create the health namespace provider.
@@ -168,8 +149,9 @@ def create_provider(context: NamespaceContext) -> NamespaceProvider:
             Validated public runtime settings with secrets omitted.
         """
         context.logger.debug("Health runtime configuration requested")
-        snapshot = context.public_snapshot(context.settings.public_snapshot())
-        return RuntimeConfigResult.model_validate(snapshot)
+        return RuntimeConfigResult.model_validate(
+            context.public_snapshot(context.settings.public_snapshot())
+        )
 
     @provider.resource(
         "portal://health/runtime/config",

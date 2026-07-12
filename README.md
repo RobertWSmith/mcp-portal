@@ -15,7 +15,7 @@ Copy-Item .env.example .env
 Use a 64-bit Python 3.11+ environment. Some FastMCP transitive dependencies ship native
 wheels, and 32-bit Python on Windows may force source builds.
 
-The scaffold reads the existing environment variables from `.env.example`. See
+The scaffold loads `.env`, which the setup command copies from `.env.example`. See
 [docs/environment-variables.md](docs/environment-variables.md) for defaults,
 accepted values, loading behavior, and production requirements.
 
@@ -29,7 +29,7 @@ accepted values, loading behavior, and production requirements.
 - `MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES` for per-namespace catalog visibility and access
 - `MCP_PORTAL_HTTP_PATH` and `MCP_PORTAL_HEALTH_PATH`
 - `MCP_PORTAL_DATABASE_PROVIDER`, `MCP_PORTAL_DATABASE_SQLALCHEMY_URL`, and `MCP_PORTAL_ORACLE_*`
-- `MCP_PORTAL_LANGCHAIN_MONGODB_*` for LangChain MongoDB connectors
+- `MCP_PORTAL_MONGODB_*` for LangChain MongoDB connectors
 - `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, and `MCP_PORTAL_*` telemetry controls
 
 The health namespace exposes only non-secret configuration metadata. It never returns
@@ -65,15 +65,14 @@ Useful launch options include:
 - `--stateless` or `--stateful`
 - `--json-response` or `--no-json-response` for HTTP-based transports
 - `--env-file path\to\.env`
-- `--debug-ui` or `--no-debug-ui`
 - `--production` for the hardened production server profile
 
 Run `mcp-portal --help` for the complete command-line reference.
 
 ## Production
 
-Use the production profile when exposing the portal over HTTP. It disables the debug
-tools, attaches lifecycle cleanup for shared clients, wires configured bearer-token
+Use the production profile when exposing the portal over HTTP. It attaches lifecycle
+cleanup for shared clients, wires configured bearer-token
 authentication, and adds an unauthenticated operational health route:
 
 ```powershell
@@ -112,6 +111,22 @@ circuit breaking, and dependency-aware readiness.
 See [the enterprise roadmap](docs/enterprise-roadmap.md) for production adapters and rollout
 phases.
 
+Inject production or test adapters as one explicit dependency bundle instead of extending
+the server factory signature:
+
+```python
+from mcp_portal.server import PortalDependencies, create_mcp
+
+server = create_mcp(
+    settings,
+    dependencies=PortalDependencies(
+        clients=client_factories,
+        policy_engine=policy_engine,
+        audit_sink=audit_sink,
+    ),
+)
+```
+
 For multi-tenant deployments set `MCP_PORTAL_REQUIRE_TENANT=true`. Namespace tools should
 use `context.tenant_scope()` for cache keys and MongoDB filters/document metadata;
 `context.tenant_sql()` for statements that explicitly bind `:portal_tenant`;
@@ -131,7 +146,7 @@ Tag metadata can be attached to SDK tools through `_meta`. Keep using `readonly`
 policy can stay centralized.
 
 Namespace catalogs are filtered per verified caller. Declare code-owned baseline access with
-`required_scopes` on `@register_namespace(...)`, and apply deployment-specific access with
+`required_scopes` in `NamespaceMetadata`, and apply deployment-specific access with
 `MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES`. A caller that lacks either set does not see that
 namespace's tools, resources, templates, or prompts. Calling a hidden tool directly is still
 denied by policy, while hidden resources and prompts respond as unknown to avoid disclosing
@@ -141,11 +156,8 @@ Relational database access goes through SQLAlchemy engines. Oracle is the prefer
 SQLAlchemy backend for portal integrations, but namespaces should depend on SQLAlchemy
 APIs so engines can be swapped for tests or future relational targets.
 
-Install the portable database extra for generic SQLAlchemy URLs:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[database]"
-```
+SQLAlchemy is included in the base installation, so generic SQLAlchemy URLs require no
+additional portal extra.
 
 Install the Oracle extra when using the preferred Oracle backend:
 
@@ -178,11 +190,11 @@ Install the MongoDB connector extra without Oracle dependencies:
 .\.venv\Scripts\python.exe -m pip install -e ".[mongodb]"
 ```
 
-Configure `MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING` and
-`MCP_PORTAL_LANGCHAIN_MONGODB_DATABASE`. Collection names are hard-coded in the portal
+Configure `MCP_PORTAL_MONGODB_CONNECTION_STRING` and
+`MCP_PORTAL_MONGODB_DATABASE`. Collection names are hard-coded in the portal
 so deployments cannot drift by changing environment variables. The built-in aliases are
 `documents`, `chat_history`, `cache`, and `semantic_cache`. Use
-`MCP_PORTAL_LANGCHAIN_MONGODB_VECTOR_SEARCH_INDEX` to override the Atlas Vector Search
+`MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX` to override the Atlas Vector Search
 index name.
 
 Namespaces can request the lazy connector helper with:
@@ -196,16 +208,6 @@ cache = connectors.cache()
 
 The helper also exposes `cache()`, `semantic_cache()`, `loader()`, `doc_store()`, and
 `agent_database()` for the matching `langchain-mongodb` integration classes.
-
-FastMCP project configuration is included:
-
-```powershell
-fastmcp run
-fastmcp run fastmcp.prod.json
-```
-
-The production config includes SQLAlchemy plus the Oracle dialect driver and uses the
-production server factory.
 
 FastMCP emits spans and MCP Portal emits tool, admission, downstream, usage, and estimated-cost
 metrics when an OpenTelemetry SDK is attached. Set `OTEL_SERVICE_NAME` and
@@ -221,26 +223,11 @@ Tool contracts can be fingerprinted in CI to catch accidental schema drift:
 from mcp_portal.contracts import generate_tool_contract_manifest
 from mcp_portal.server import create_mcp
 
-manifest = await generate_tool_contract_manifest(create_mcp(include_debug_ui=False))
+manifest = await generate_tool_contract_manifest(create_mcp())
 ```
 
 Each fingerprint is based on the MCP-facing tool payload, including the tool key and
 input/output schema.
-
-## Debug Tools
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-mcp-portal --transport streamable-http --port 8000
-```
-
-This starts the MCP server over streamable HTTP on port 8000 and exposes the
-`portal_debug` and `debug_snapshot` tools for local diagnostics. Use `--port` if
-the port is already taken.
-
-The debug payload is composed centrally. Namespaces contribute status checks and
-debug panels through their manifest, while the portal owns redaction and presentation.
-Disabled namespaces still appear in the debug snapshot, but their tools are not mounted.
 
 ## Test
 
@@ -286,7 +273,7 @@ from pydantic import BaseModel
 
 from mcp_portal.namespaces import (
     NamespaceContext,
-    NamespaceDebugPanel,
+    NamespaceMetadata,
     NamespaceProvider,
     NamespaceStatus,
     register_namespace,
@@ -308,21 +295,13 @@ def example_status(context: NamespaceContext) -> NamespaceStatus:
     )
 
 
-def example_debug_panel(context: NamespaceContext) -> NamespaceDebugPanel:
-    """Build example namespace debug details."""
-    return NamespaceDebugPanel(
-        title="Example Namespace",
-        summary="Example tools and runtime metadata.",
-        snapshot={"large_model": context.settings.large_language_model},
-    )
-
-
 @register_namespace(
-    "example",
-    description="Example tools for local development.",
-    tags={"example", "readonly"},
-    health_check=example_status,
-    debug=example_debug_panel,
+    NamespaceMetadata(
+        name="example",
+        description="Example tools for local development.",
+        tags=frozenset({"example", "readonly"}),
+        health_check=example_status,
+    )
 )
 def create_provider(context: NamespaceContext) -> NamespaceProvider:
     """Create the example namespace provider.
@@ -380,7 +359,8 @@ def create_provider(context: NamespaceContext) -> NamespaceProvider:
 The portal prefixes tool and prompt names, so `hello` becomes `example_hello` and
 `welcome` becomes `example_welcome`. Resource URIs remain stable while their display
 names are prefixed. Registrations are installed through public FastMCP APIs rather than
-copying private manager state. See `namespaces/health.py` for the complete reference.
+copying private manager state. See `src/mcp_portal/namespaces/health.py` for the complete
+reference.
 Namespace modules are discovered automatically; adding the decorated module is enough.
 Use MCP `ToolAnnotations` for client-visible behavior and Pydantic response models for
 stable `outputSchema` and `structuredContent`. Keep `_meta.tags` only as portal policy

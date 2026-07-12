@@ -5,84 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from mcp_portal.config import Settings, _bool_env, _optional_env, _resolve_env_file
-
-PORTAL_ENV_NAMES = (
-    "MCP_PORTAL_MODEL_PROVIDER",
-    "OPENAI_API_KEY",
-    "OPENAI_LARGE_LANGUAGE_MODEL",
-    "OPENAI_SMALL_LANGUAGE_MODEL",
-    "OPENAI_EMBEDDING_MODEL",
-    "AZURE_OPENAI_ENDPOINT",
-    "AZURE_OPENAI_API_VERSION",
-    "AZURE_OPENAI_TOKEN_SCOPE",
-    "AZURE_OPENAI_LARGE_LANGUAGE_MODEL_DEPLOYMENT",
-    "AZURE_OPENAI_SMALL_LANGUAGE_MODEL_DEPLOYMENT",
-    "AZURE_OPENAI_EMBEDDING_MODEL_DEPLOYMENT",
-    "AZURE_TENANT_ID",
-    "AZURE_CLIENT_ID",
-    "AZURE_CLIENT_SECRET",
-    "MCP_PORTAL_HEALTH_ENABLED",
-    "MCP_PORTAL_AUTH_PROVIDER",
-    "MCP_PORTAL_AUTH_REQUIRED_SCOPES",
-    "MCP_PORTAL_AUTH_STATIC_TOKEN",
-    "MCP_PORTAL_AUTH_STATIC_CLIENT_ID",
-    "MCP_PORTAL_AUTH_STATIC_SCOPES",
-    "MCP_PORTAL_AUTH_JWT_PUBLIC_KEY",
-    "MCP_PORTAL_AUTH_JWT_JWKS_URI",
-    "MCP_PORTAL_AUTH_JWT_ISSUER",
-    "MCP_PORTAL_AUTH_JWT_AUDIENCE",
-    "MCP_PORTAL_AUTH_JWT_ALGORITHM",
-    "MCP_PORTAL_AUTH_LDAP_URI",
-    "MCP_PORTAL_AUTH_LDAP_BASE_DN",
-    "MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE",
-    "MCP_PORTAL_AUTH_LDAP_SEARCH_FILTER",
-    "MCP_PORTAL_AUTH_LDAP_BIND_DN",
-    "MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD",
-    "MCP_PORTAL_AUTH_LDAP_START_TLS",
-    "MCP_PORTAL_AUTH_LDAP_CA_CERT_FILE",
-    "MCP_PORTAL_AUTH_LDAP_CONNECT_TIMEOUT",
-    "MCP_PORTAL_AUTH_LDAP_SCOPES",
-    "MCP_PORTAL_AUTH_KERBEROS_HOSTNAME",
-    "MCP_PORTAL_AUTH_KERBEROS_SERVICE",
-    "MCP_PORTAL_AUTH_KERBEROS_KEYTAB",
-    "MCP_PORTAL_AUTH_KERBEROS_SCOPES",
-    "MCP_PORTAL_AUTHZ_TAG_SCOPES",
-    "MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES",
-    "MCP_PORTAL_MIDDLEWARE_ENABLED",
-    "MCP_PORTAL_STRUCTURED_LOGGING",
-    "MCP_PORTAL_LOG_PAYLOAD_LENGTHS",
-    "MCP_PORTAL_RATE_LIMIT_PER_SECOND",
-    "MCP_PORTAL_RATE_LIMIT_BURST",
-    "MCP_PORTAL_RESPONSE_MAX_BYTES",
-    "MCP_PORTAL_TOOL_TIMEOUT_OVERRIDES",
-    "MCP_PORTAL_TOOL_CONCURRENCY_LIMITS",
-    "MCP_PORTAL_DOWNSTREAM_TIMEOUT_SECONDS",
-    "MCP_PORTAL_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
-    "MCP_PORTAL_CIRCUIT_BREAKER_RECOVERY_SECONDS",
-    "MCP_PORTAL_HTTP_PATH",
-    "MCP_PORTAL_HEALTH_PATH",
-    "MCP_PORTAL_JSON_RESPONSE",
-    "MCP_PORTAL_STATELESS_HTTP",
-    "MCP_PORTAL_NAMESPACE_DISCOVERY_STRICT",
-    "MCP_PORTAL_DATABASE_PROVIDER",
-    "MCP_PORTAL_DATABASE_SQLALCHEMY_URL",
-    "MCP_PORTAL_ORACLE_DSN",
-    "MCP_PORTAL_ORACLE_USER",
-    "MCP_PORTAL_ORACLE_PASSWORD",
-    "MCP_PORTAL_ORACLE_POOL_MIN",
-    "MCP_PORTAL_ORACLE_POOL_MAX",
-    "MCP_PORTAL_MONGODB_CONNECTION_STRING",
-    "MCP_PORTAL_MONGODB_DATABASE",
-    "MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX",
-    "OTEL_SERVICE_NAME",
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "MCP_PORTAL_METRICS_ENABLED",
-    "MCP_PORTAL_COST_ACCOUNTING_ENABLED",
-    "MCP_PORTAL_METRICS_INCLUDE_TENANT",
-    "MCP_PORTAL_COST_CURRENCY",
-    "MCP_PORTAL_PRICING_VERSION",
+from mcp_portal.config import (
+    ENVIRONMENT_VARIABLE_NAMES,
+    Settings,
+    _bool_env,
+    _optional_env,
+    _resolve_env_file,
 )
+
+PORTAL_ENV_NAMES = tuple(sorted(ENVIRONMENT_VARIABLE_NAMES))
 
 
 @pytest.fixture(autouse=True)
@@ -99,6 +30,30 @@ def clean_portal_environment():
             os.environ.pop(name, None)
         else:
             os.environ[name] = value
+
+
+def test_environment_documentation_matches_settings() -> None:
+    """Verify environment examples and reference docs cover the implemented settings."""
+    project_root = Path(__file__).resolve().parents[1]
+    documented_names: set[str] = set()
+    for line in (
+        (project_root / "docs" / "environment-variables.md")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ):
+        if not line.startswith("| `"):
+            continue
+        name = line.split("`", maxsplit=2)[1]
+        if name.startswith(("MCP_PORTAL_", "OPENAI_", "AZURE_", "OTEL_")):
+            documented_names.add(name)
+    example_names = {
+        line.split("=", maxsplit=1)[0]
+        for line in (project_root / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    }
+
+    assert documented_names == ENVIRONMENT_VARIABLE_NAMES
+    assert example_names == ENVIRONMENT_VARIABLE_NAMES
 
 
 def test_settings_from_explicit_env_file(tmp_path: Path, monkeypatch) -> None:
