@@ -1,3 +1,5 @@
+"""Test environment-backed settings parsing, defaults, and documentation."""
+
 from __future__ import annotations
 
 import os

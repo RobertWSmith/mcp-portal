@@ -1,3 +1,5 @@
+"""Enforce network egress restrictions for downstream destinations."""
+
 from __future__ import annotations
 
 import ipaddress

@@ -1,3 +1,5 @@
+"""Build the production ASGI application around an MCP Portal server."""
+
 from __future__ import annotations
 
 from typing import Any

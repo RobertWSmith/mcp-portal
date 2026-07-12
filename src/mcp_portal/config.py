@@ -1,3 +1,5 @@
+"""Load and validate MCP Portal settings from environment sources."""
+
 from __future__ import annotations
 
 import os

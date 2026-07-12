@@ -1,3 +1,5 @@
+"""Test governance, resilience, auditing, and other enterprise controls."""
+
 from __future__ import annotations
 
 from dataclasses import replace

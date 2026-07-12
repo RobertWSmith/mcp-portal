@@ -1,3 +1,5 @@
+"""Partition tasks, storage, and downstream clients by tenant identity."""
+
 from __future__ import annotations
 
 import copy

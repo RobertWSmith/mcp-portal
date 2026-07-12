@@ -1,3 +1,5 @@
+"""Define approval verification interfaces and fail-closed defaults."""
+
 from __future__ import annotations
 
 from typing import Any, Protocol

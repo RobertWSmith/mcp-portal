@@ -1,3 +1,5 @@
+"""Provide quotas, admission control, and circuit-breaker protection."""
+
 from __future__ import annotations
 
 import asyncio

@@ -1,3 +1,5 @@
+"""Define downstream credential brokerage interfaces and safe defaults."""
+
 from __future__ import annotations
 
 from typing import Protocol

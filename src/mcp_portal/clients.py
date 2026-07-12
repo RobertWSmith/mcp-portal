@@ -1,3 +1,5 @@
+"""Construct lifecycle-managed database and MongoDB client integrations."""
+
 from __future__ import annotations
 
 import asyncio

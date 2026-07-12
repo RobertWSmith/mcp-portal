@@ -1,3 +1,5 @@
+"""Offer test settings, namespace contexts, and isolated MCP clients."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

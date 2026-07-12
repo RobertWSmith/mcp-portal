@@ -1,3 +1,5 @@
+"""Assemble the production middleware stack from portal settings."""
+
 from __future__ import annotations
 
 from fastmcp.server.middleware import AuthMiddleware, Middleware
