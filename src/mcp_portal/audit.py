@@ -44,6 +44,21 @@ class AuditEvent:
     duration_ms: float | None = None
 
 
+@dataclass(frozen=True)
+class AuditDetails:
+    """Optional decision or completion details for an audit event.
+
+    Attributes:
+        decision: Optional authorization decision.
+        outcome: Optional completion outcome.
+        duration_ms: Optional execution duration.
+    """
+
+    decision: PolicyDecision | None = None
+    outcome: str | None = None
+    duration_ms: float | None = None
+
+
 class AuditSink(Protocol):
     """Destination for immutable audit events."""
 
@@ -101,18 +116,16 @@ def digest_arguments(arguments: dict[str, Any]) -> str:
     Returns:
         Hexadecimal SHA-256 digest.
     """
-    canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
 
 
 def audit_event(
     event: str,
     invocation: InvocationContext,
     arguments: dict[str, Any],
-    *,
-    decision: PolicyDecision | None = None,
-    outcome: str | None = None,
-    duration_ms: float | None = None,
+    details: AuditDetails | None = None,
 ) -> AuditEvent:
     """Compose a normalized audit event without raw arguments or credentials.
 
@@ -120,14 +133,13 @@ def audit_event(
         event: Lifecycle event name.
         invocation: Trusted invocation context.
         arguments: Validated invocation arguments.
-        decision: Optional authorization decision.
-        outcome: Optional completion outcome.
-        duration_ms: Optional execution duration.
+        details: Optional authorization or completion details.
 
     Returns:
         Sanitized audit event.
     """
     identity = invocation.identity
+    details = details or AuditDetails()
     return AuditEvent(
         occurred_at=datetime.now(timezone.utc).isoformat(),
         event=event,
@@ -137,8 +149,8 @@ def audit_event(
         tenant_id=identity.tenant_id,
         client_id=identity.client_id,
         argument_digest=digest_arguments(arguments),
-        allowed=decision.allowed if decision else None,
-        reason=decision.reason if decision else None,
-        outcome=outcome,
-        duration_ms=duration_ms,
+        allowed=details.decision.allowed if details.decision else None,
+        reason=details.decision.reason if details.decision else None,
+        outcome=details.outcome,
+        duration_ms=details.duration_ms,
     )

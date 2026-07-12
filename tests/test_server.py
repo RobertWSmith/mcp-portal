@@ -7,12 +7,11 @@ from fastmcp import Client
 
 import mcp_portal.namespaces as namespace_registry
 from mcp_portal.config import Settings
-from mcp_portal.debug_ui import _runtime_snapshot_text, create_debug_app
 from mcp_portal.namespaces import (
     Namespace,
     NamespaceContext,
+    NamespaceMetadata,
     NamespaceProvider,
-    build_namespace_runtimes,
 )
 from mcp_portal.server import create_mcp
 from mcp_portal.testing import create_test_settings
@@ -110,47 +109,6 @@ async def test_health_namespace_publishes_complete_server_surface(client: Client
     assert "Diagnose MCP Portal authorization" in diagnosis.messages[0].content.text
 
 
-async def test_debug_ui_tool_is_exposed(client: Client) -> None:
-    """Verify the FastMCP Apps debug dashboard is available to dev tools."""
-    tools = await client.list_tools()
-    tool_names = {tool.name for tool in tools}
-
-    assert "portal_debug" in tool_names
-
-
-async def test_debug_ui_provider_renders_dashboard(settings: Settings) -> None:
-    """Verify the debug provider builds its snapshot tool and Prefab UI."""
-    runtimes = build_namespace_runtimes(namespace_registry.iter_namespaces(), settings)
-    debug_app = create_debug_app(settings, runtimes)
-    server = create_mcp(settings, namespaces=(), include_debug_ui=False)
-    server.add_provider(debug_app)
-    app_tools = {tool.name for tool in await server.list_tools()}
-
-    async with Client(server) as client:
-        snapshot_result = await client.call_tool("debug_snapshot", {})
-        dashboard_result = await client.call_tool("portal_debug", {})
-
-    assert {"debug_snapshot", "portal_debug"} <= app_tools
-    assert "large-model" in snapshot_result.content[0].text
-    assert "Health Namespace" in snapshot_result.content[0].text
-    assert dashboard_result.data["state"] == {
-        "snapshot_text": _runtime_snapshot_text(settings, runtimes)
-    }
-
-
-async def test_debug_ui_marks_missing_model_provider_settings() -> None:
-    """Verify the dashboard handles missing provider settings."""
-    settings = create_test_settings(openai_api_key=None)
-    debug_app = create_debug_app(settings)
-    server = create_mcp(settings, namespaces=(), include_debug_ui=False)
-    server.add_provider(debug_app)
-
-    async with Client(server) as client:
-        dashboard_result = await client.call_tool("portal_debug", {})
-
-    assert '"configured": false' in dashboard_result.data["state"]["snapshot_text"]
-
-
 def test_namespace_registration_decorator_records_factory(monkeypatch) -> None:
     """Verify namespace factories can register themselves with a decorator."""
     monkeypatch.setattr(namespace_registry, "_NAMESPACE_REGISTRY", {})
@@ -168,9 +126,11 @@ def test_namespace_registration_decorator_records_factory(monkeypatch) -> None:
         return NamespaceProvider(f"Example {context.settings.large_language_model}")
 
     decorated = namespace_registry.register_namespace(
-        "example",
-        description="Example namespace.",
-        tags={"example", "test"},
+        NamespaceMetadata(
+            name="example",
+            description="Example namespace.",
+            tags=frozenset({"example", "test"}),
+        )
     )(create_example_provider)
 
     assert decorated is create_example_provider
@@ -253,7 +213,6 @@ async def test_custom_namespace_registry(settings: Settings) -> None:
                     tags=frozenset({"example", "readonly"}),
                 ),
             ),
-            include_debug_ui=False,
         )
     ) as custom_client:
         tools = await custom_client.list_tools()

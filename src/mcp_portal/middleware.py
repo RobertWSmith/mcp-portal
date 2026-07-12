@@ -25,8 +25,7 @@ def create_production_middleware(
     Returns:
         Middleware instances ordered for parent-server installation.
     """
-    should_enable = settings.middleware.enabled if enabled is None else enabled
-    if not should_enable:
+    if not (settings.middleware.enabled if enabled is None else enabled):
         return ()
 
     middleware: list[Middleware] = [ErrorHandlingMiddleware()]

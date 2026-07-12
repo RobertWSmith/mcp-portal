@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 from contextvars import ContextVar
+from functools import partial
 import importlib.util
 import os
 import ssl
@@ -43,10 +44,36 @@ def create_auth_provider(settings: Settings) -> AuthProvider | None:
         return None
 
     if settings.auth.provider == "static":
-        return _create_static_token_verifier(settings)
+        if settings.auth.static_token is None:
+            raise ConfigurationPortalError(
+                "Static authentication provider requires MCP_PORTAL_AUTH_STATIC_TOKEN.",
+                details={"provider": "static"},
+            )
+        return StaticTokenVerifier(
+            tokens={
+                settings.auth.static_token: {
+                    "client_id": settings.auth.static_client_id,
+                    "scopes": list(settings.auth.static_scopes or settings.auth.required_scopes),
+                }
+            },
+            required_scopes=list(settings.auth.required_scopes),
+        )
 
     if settings.auth.provider == "jwt":
-        return _create_jwt_verifier(settings)
+        if settings.auth.jwt_public_key is None and settings.auth.jwt_jwks_uri is None:
+            raise ConfigurationPortalError(
+                "JWT authentication requires MCP_PORTAL_AUTH_JWT_PUBLIC_KEY or "
+                "MCP_PORTAL_AUTH_JWT_JWKS_URI.",
+                details={"provider": "jwt"},
+            )
+        return JWTVerifier(
+            public_key=settings.auth.jwt_public_key,
+            jwks_uri=settings.auth.jwt_jwks_uri,
+            issuer=settings.auth.jwt_issuer,
+            audience=settings.auth.jwt_audience,
+            algorithm=settings.auth.jwt_algorithm,
+            required_scopes=list(settings.auth.required_scopes),
+        )
 
     if settings.auth.provider in {"ldap", "kerberos", "ldap_kerberos"}:
         return _create_enterprise_verifier(settings)
@@ -70,65 +97,6 @@ def create_authorization_checks(settings: Settings) -> list[AuthCheck]:
         restrict_tag(tag, scopes=list(scopes))
         for tag, scopes in sorted(settings.authorization.tag_scopes.items())
     ]
-
-
-def _create_static_token_verifier(settings: Settings) -> AuthProvider:
-    """Create a development-only static token verifier.
-
-    Args:
-        settings: Runtime settings containing static-token configuration.
-
-    Returns:
-        A FastMCP static token verifier.
-
-    Raises:
-        ConfigurationPortalError: If the static token is missing.
-    """
-    if settings.auth.static_token is None:
-        raise ConfigurationPortalError(
-            "Static authentication provider requires MCP_PORTAL_AUTH_STATIC_TOKEN.",
-            details={"provider": "static"},
-        )
-
-    scopes = settings.auth.static_scopes or settings.auth.required_scopes
-    return StaticTokenVerifier(
-        tokens={
-            settings.auth.static_token: {
-                "client_id": settings.auth.static_client_id,
-                "scopes": list(scopes),
-            }
-        },
-        required_scopes=list(settings.auth.required_scopes),
-    )
-
-
-def _create_jwt_verifier(settings: Settings) -> AuthProvider:
-    """Create a JWT or JWKS token verifier.
-
-    Args:
-        settings: Runtime settings containing JWT verifier configuration.
-
-    Returns:
-        A FastMCP JWT token verifier.
-
-    Raises:
-        ConfigurationPortalError: If neither a public key nor JWKS URI is configured.
-    """
-    if settings.auth.jwt_public_key is None and settings.auth.jwt_jwks_uri is None:
-        raise ConfigurationPortalError(
-            "JWT authentication requires MCP_PORTAL_AUTH_JWT_PUBLIC_KEY or "
-            "MCP_PORTAL_AUTH_JWT_JWKS_URI.",
-            details={"provider": "jwt"},
-        )
-
-    return JWTVerifier(
-        public_key=settings.auth.jwt_public_key,
-        jwks_uri=settings.auth.jwt_jwks_uri,
-        issuer=settings.auth.jwt_issuer,
-        audience=settings.auth.jwt_audience,
-        algorithm=settings.auth.jwt_algorithm,
-        required_scopes=list(settings.auth.required_scopes),
-    )
 
 
 class EnterpriseAuthProvider(AuthProvider):
@@ -159,24 +127,25 @@ class EnterpriseAuthProvider(AuthProvider):
             return None
 
         if scheme == "ldap" and self.ldap_enabled:
-            credentials = _decode_basic_credentials(payload)
-            if credentials is None:
-                return None
-            username, password = credentials
             try:
-                accepted = await anyio.to_thread.run_sync(
+                decoded_credentials = base64.b64decode(payload, validate=True).decode("utf-8")
+            except (UnicodeDecodeError, binascii.Error):
+                return None
+            username, separator, password = decoded_credentials.partition(":")
+            if not separator or not username or not password:
+                return None
+            try:
+                if not await anyio.to_thread.run_sync(
                     _verify_ldap_credentials, self.settings, username, password
-                )
+                ):
+                    return None
             except Exception:
                 return None
-            if not accepted:
-                return None
-            scopes = self.settings.auth.ldap_scopes or self.settings.auth.required_scopes
             return AccessToken(
                 token="ldap-authenticated",
                 client_id=username,
                 subject=username,
-                scopes=list(scopes),
+                scopes=list(self.settings.auth.ldap_scopes or self.settings.auth.required_scopes),
                 claims={"auth_method": "ldap"},
             )
 
@@ -184,19 +153,22 @@ class EnterpriseAuthProvider(AuthProvider):
             try:
                 service_ticket = base64.b64decode(payload, validate=True)
                 principal, response_token = await anyio.to_thread.run_sync(
-                    _verify_kerberos_ticket, self.settings, service_ticket
+                    _verify_kerberos_ticket,
+                    self.settings,
+                    service_ticket,
                 )
             except Exception:
                 return None
             if not principal:
                 return None
             _kerberos_response_token.set(response_token)
-            scopes = self.settings.auth.kerberos_scopes or self.settings.auth.required_scopes
             return AccessToken(
                 token="kerberos-authenticated",
                 client_id=principal,
                 subject=principal,
-                scopes=list(scopes),
+                scopes=list(
+                    self.settings.auth.kerberos_scopes or self.settings.auth.required_scopes
+                ),
                 claims={"auth_method": "kerberos"},
             )
 
@@ -228,7 +200,26 @@ class EnterpriseAuthSchemeMiddleware:
             await self.app(scope, receive, send)
             return
 
-        selected_scope = scope
+        selected_scope = self._adapt_scope(scope)
+        context_token = _kerberos_response_token.set(None)
+        try:
+            await self.app(
+                selected_scope,
+                receive,
+                partial(self._send_with_challenge, send=send),
+            )
+        finally:
+            _kerberos_response_token.reset(context_token)
+
+    def _adapt_scope(self, scope: dict[str, Any]) -> dict[str, Any]:
+        """Translate an enterprise authorization header into a bearer header.
+
+        Args:
+            scope: Incoming HTTP ASGI scope.
+
+        Returns:
+            The original or translated ASGI scope.
+        """
         headers = list(scope.get("headers", ()))
         for index, (name, value) in enumerate(headers):
             if name.lower() != b"authorization":
@@ -237,38 +228,33 @@ class EnterpriseAuthSchemeMiddleware:
             normalized_scheme = scheme.lower()
             if separator and normalized_scheme == b"basic" and self.provider.ldap_enabled:
                 headers[index] = (name, b"Bearer ldap:" + payload)
-                selected_scope = dict(scope, headers=headers)
-            elif separator and normalized_scheme == b"negotiate" and self.provider.kerberos_enabled:
+                return dict(scope, headers=headers)
+            if separator and normalized_scheme == b"negotiate" and self.provider.kerberos_enabled:
                 headers[index] = (name, b"Bearer kerberos:" + payload)
-                selected_scope = dict(scope, headers=headers)
-            break
+                return dict(scope, headers=headers)
+            return scope
+        return scope
 
-        context_token = _kerberos_response_token.set(None)
+    async def _send_with_challenge(self, message: dict[str, Any], *, send: Any) -> None:
+        """Attach Basic or Negotiate challenges to an ASGI response.
 
-        async def send_with_challenge(message: dict[str, Any]) -> None:
-            """Attach Basic or Negotiate challenges to an ASGI response.
-
-            Args:
-                message: Outbound ASGI response message.
-            """
-            if message["type"] == "http.response.start":
-                response_headers = list(message.get("headers", ()))
-                status = message.get("status")
-                kerberos_token = _kerberos_response_token.get()
-                if kerberos_token:
-                    challenge = b"Negotiate " + base64.b64encode(kerberos_token)
-                    response_headers.append((b"www-authenticate", challenge))
-                elif status == 401 and self.provider.kerberos_enabled:
-                    response_headers.append((b"www-authenticate", b"Negotiate"))
-                if status == 401 and self.provider.ldap_enabled:
-                    response_headers.append((b"www-authenticate", b'Basic realm="mcp-portal"'))
-                message = dict(message, headers=response_headers)
-            await send(message)
-
-        try:
-            await self.app(selected_scope, receive, send_with_challenge)
-        finally:
-            _kerberos_response_token.reset(context_token)
+        Args:
+            message: Outbound ASGI response message.
+            send: Wrapped ASGI send callable.
+        """
+        if message["type"] == "http.response.start":
+            response_headers = list(message.get("headers", ()))
+            status = message.get("status")
+            kerberos_token = _kerberos_response_token.get()
+            if kerberos_token:
+                challenge = b"Negotiate " + base64.b64encode(kerberos_token)
+                response_headers.append((b"www-authenticate", challenge))
+            elif status == 401 and self.provider.kerberos_enabled:
+                response_headers.append((b"www-authenticate", b"Negotiate"))
+            if status == 401 and self.provider.ldap_enabled:
+                response_headers.append((b"www-authenticate", b'Basic realm="mcp-portal"'))
+            message = dict(message, headers=response_headers)
+        await send(message)
 
 
 def _create_enterprise_verifier(settings: Settings) -> EnterpriseAuthProvider:
@@ -280,63 +266,84 @@ def _create_enterprise_verifier(settings: Settings) -> EnterpriseAuthProvider:
     Returns:
         Configured LDAP and/or Kerberos verifier.
     """
-    ldap_enabled = settings.auth.provider in {"ldap", "ldap_kerberos"}
-    kerberos_enabled = settings.auth.provider in {"kerberos", "ldap_kerberos"}
+    if settings.auth.provider in {"ldap", "ldap_kerberos"}:
+        _validate_ldap_settings(settings)
 
-    if ldap_enabled:
-        if settings.auth.ldap_uri is None:
-            raise ConfigurationPortalError(
-                "LDAP authentication requires MCP_PORTAL_AUTH_LDAP_URI.",
-                details={"provider": settings.auth.provider},
-            )
-        if not settings.auth.ldap_user_dn_template and not settings.auth.ldap_base_dn:
-            raise ConfigurationPortalError(
-                "LDAP authentication requires MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE or "
-                "MCP_PORTAL_AUTH_LDAP_BASE_DN.",
-                details={"provider": settings.auth.provider},
-            )
-        if (
-            settings.auth.ldap_user_dn_template
-            and "{username}" not in settings.auth.ldap_user_dn_template
-        ):
-            raise ConfigurationPortalError(
-                "MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE must contain {username}.",
-                details={"provider": settings.auth.provider},
-            )
-        if (
-            not settings.auth.ldap_user_dn_template
-            and "{username}" not in settings.auth.ldap_search_filter
-        ):
-            raise ConfigurationPortalError(
-                "MCP_PORTAL_AUTH_LDAP_SEARCH_FILTER must contain {username}.",
-                details={"provider": settings.auth.provider},
-            )
-        if bool(settings.auth.ldap_bind_dn) != bool(settings.auth.ldap_bind_password):
-            raise ConfigurationPortalError(
-                "MCP_PORTAL_AUTH_LDAP_BIND_DN and MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD "
-                "must be configured together.",
-                details={"provider": settings.auth.provider},
-            )
-        if not settings.auth.ldap_uri.lower().startswith("ldaps://") and not (
-            settings.auth.ldap_uri.lower().startswith("ldap://") and settings.auth.ldap_start_tls
-        ):
-            raise ConfigurationPortalError(
-                "LDAP authentication requires LDAPS or MCP_PORTAL_AUTH_LDAP_START_TLS=true.",
-                details={"provider": settings.auth.provider},
-            )
-        _require_optional_dependency("ldap3", "ldap")
-
-    if kerberos_enabled:
-        if settings.auth.kerberos_hostname is None:
-            raise ConfigurationPortalError(
-                "Kerberos authentication requires MCP_PORTAL_AUTH_KERBEROS_HOSTNAME.",
-                details={"provider": settings.auth.provider},
-            )
-        _require_optional_dependency("spnego", "kerberos")
-        if settings.auth.kerberos_keytab:
-            os.environ.setdefault("KRB5_KTNAME", settings.auth.kerberos_keytab)
+    if settings.auth.provider in {"kerberos", "ldap_kerberos"}:
+        _validate_kerberos_settings(settings)
 
     return EnterpriseAuthProvider(settings)
+
+
+def _validate_ldap_settings(settings: Settings) -> None:
+    """Validate LDAP settings and require the optional directory dependency.
+
+    Args:
+        settings: Portal settings containing LDAP configuration.
+
+    Raises:
+        ConfigurationPortalError: If LDAP configuration is unsafe or incomplete.
+    """
+    if settings.auth.ldap_uri is None:
+        raise ConfigurationPortalError(
+            "LDAP authentication requires MCP_PORTAL_AUTH_LDAP_URI.",
+            details={"provider": settings.auth.provider},
+        )
+    if not settings.auth.ldap_user_dn_template and not settings.auth.ldap_base_dn:
+        raise ConfigurationPortalError(
+            "LDAP authentication requires MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE or "
+            "MCP_PORTAL_AUTH_LDAP_BASE_DN.",
+            details={"provider": settings.auth.provider},
+        )
+    if (
+        settings.auth.ldap_user_dn_template
+        and "{username}" not in settings.auth.ldap_user_dn_template
+    ):
+        raise ConfigurationPortalError(
+            "MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE must contain {username}.",
+            details={"provider": settings.auth.provider},
+        )
+    if (
+        not settings.auth.ldap_user_dn_template
+        and "{username}" not in settings.auth.ldap_search_filter
+    ):
+        raise ConfigurationPortalError(
+            "MCP_PORTAL_AUTH_LDAP_SEARCH_FILTER must contain {username}.",
+            details={"provider": settings.auth.provider},
+        )
+    if bool(settings.auth.ldap_bind_dn) != bool(settings.auth.ldap_bind_password):
+        raise ConfigurationPortalError(
+            "MCP_PORTAL_AUTH_LDAP_BIND_DN and MCP_PORTAL_AUTH_LDAP_BIND_PASSWORD "
+            "must be configured together.",
+            details={"provider": settings.auth.provider},
+        )
+    if not settings.auth.ldap_uri.lower().startswith("ldaps://") and not (
+        settings.auth.ldap_uri.lower().startswith("ldap://") and settings.auth.ldap_start_tls
+    ):
+        raise ConfigurationPortalError(
+            "LDAP authentication requires LDAPS or MCP_PORTAL_AUTH_LDAP_START_TLS=true.",
+            details={"provider": settings.auth.provider},
+        )
+    _require_optional_dependency("ldap3", "ldap")
+
+
+def _validate_kerberos_settings(settings: Settings) -> None:
+    """Validate Kerberos settings and require the optional SPNEGO dependency.
+
+    Args:
+        settings: Portal settings containing Kerberos configuration.
+
+    Raises:
+        ConfigurationPortalError: If Kerberos configuration is incomplete.
+    """
+    if settings.auth.kerberos_hostname is None:
+        raise ConfigurationPortalError(
+            "Kerberos authentication requires MCP_PORTAL_AUTH_KERBEROS_HOSTNAME.",
+            details={"provider": settings.auth.provider},
+        )
+    _require_optional_dependency("spnego", "kerberos")
+    if settings.auth.kerberos_keytab:
+        os.environ.setdefault("KRB5_KTNAME", settings.auth.kerberos_keytab)
 
 
 def _require_optional_dependency(module: str, extra: str) -> None:
@@ -351,25 +358,6 @@ def _require_optional_dependency(module: str, extra: str) -> None:
             f"{module} is required for this authentication provider; install mcp-portal[{extra}].",
             details={"dependency": module, "extra": extra},
         )
-
-
-def _decode_basic_credentials(payload: str) -> tuple[str, str] | None:
-    """Decode an HTTP Basic credential payload.
-
-    Args:
-        payload: Base64-encoded ``username:password`` value.
-
-    Returns:
-        Username and password, or None for malformed/empty credentials.
-    """
-    try:
-        decoded = base64.b64decode(payload, validate=True).decode("utf-8")
-    except (UnicodeDecodeError, binascii.Error):
-        return None
-    username, separator, password = decoded.partition(":")
-    if not separator or not username or not password:
-        return None
-    return username, password
 
 
 def _verify_ldap_credentials(  # pragma: no cover - live directory integration
@@ -391,12 +379,11 @@ def _verify_ldap_credentials(  # pragma: no cover - live directory integration
 
     auth = settings.auth
     parsed_uri = urlsplit(auth.ldap_uri)
-    tls = Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=auth.ldap_ca_cert_file)
     server = Server(
         parsed_uri.hostname,
         port=parsed_uri.port,
         use_ssl=parsed_uri.scheme.lower() == "ldaps",
-        tls=tls,
+        tls=Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=auth.ldap_ca_cert_file),
         connect_timeout=auth.ldap_connect_timeout,
     )
 
@@ -416,11 +403,10 @@ def _verify_ldap_credentials(  # pragma: no cover - live directory integration
                 search_connection.start_tls()
             if not search_connection.bind():
                 return False
-            search_filter = auth.ldap_search_filter.format(username=escape_filter_chars(username))
             if (
                 not search_connection.search(
                     auth.ldap_base_dn,
-                    search_filter,
+                    auth.ldap_search_filter.format(username=escape_filter_chars(username)),
                     search_scope=SUBTREE,
                     attributes=[],
                     size_limit=2,

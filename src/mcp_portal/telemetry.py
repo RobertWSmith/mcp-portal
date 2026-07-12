@@ -13,6 +13,36 @@ from mcp_portal.security import InvocationContext
 
 
 @dataclass(frozen=True)
+class UsageMeasurement:
+    """Namespace-reported usage before trusted invocation fields are attached.
+
+    Attributes:
+        provider: External provider or internal cost center.
+        service: Metered service or product family.
+        operation: Low-cardinality operation name.
+        quantity: Consumed quantity.
+        unit: Unit of the consumed quantity.
+        namespace: Optional namespace reporting consumption. Trusted namespace contexts
+            replace this value.
+        sku: Optional model, deployment, or provider SKU.
+        estimated_cost: Optional estimated monetary cost.
+        currency: Optional currency code.
+        pricing_version: Optional pricing table or contract version.
+    """
+
+    provider: str
+    service: str
+    operation: str
+    quantity: int | float | Decimal | str
+    unit: str
+    namespace: str | None = None
+    sku: str | None = None
+    estimated_cost: int | float | Decimal | str | None = None
+    currency: str | None = None
+    pricing_version: str | None = None
+
+
+@dataclass(frozen=True)
 class UsageRecord:
     """Detailed tenant-scoped usage and estimated-cost accounting record.
 
@@ -56,32 +86,13 @@ class UsageRecord:
     def create(
         cls,
         invocation: InvocationContext,
-        namespace: str,
-        *,
-        provider: str,
-        service: str,
-        operation: str,
-        quantity: int | float | Decimal | str,
-        unit: str,
-        sku: str | None = None,
-        estimated_cost: int | float | Decimal | str | None = None,
-        currency: str = "USD",
-        pricing_version: str | None = None,
+        measurement: UsageMeasurement,
     ) -> "UsageRecord":
         """Create a validated accounting record from trusted invocation context.
 
         Args:
             invocation: Current trusted tool invocation.
-            namespace: Namespace reporting the usage.
-            provider: External provider or internal cost center.
-            service: Metered service or product family.
-            operation: Low-cardinality operation name.
-            quantity: Consumed quantity.
-            unit: Unit of the consumed quantity.
-            sku: Optional model, deployment, or provider SKU.
-            estimated_cost: Optional estimated monetary cost.
-            currency: Currency code for the estimate.
-            pricing_version: Pricing table or contract version.
+            measurement: Namespace-reported usage fields.
 
         Returns:
             Validated immutable usage record.
@@ -89,10 +100,25 @@ class UsageRecord:
         Raises:
             ValueError: If required labels are blank or numeric values are negative.
         """
-        quantity_value = Decimal(str(quantity))
-        cost_value = Decimal(str(estimated_cost)) if estimated_cost is not None else None
-        labels = (namespace, provider, service, operation, unit, currency)
-        if any(not value.strip() for value in labels):
+        quantity_value = Decimal(str(measurement.quantity))
+        cost_value = (
+            Decimal(str(measurement.estimated_cost))
+            if measurement.estimated_cost is not None
+            else None
+        )
+        currency = measurement.currency or "USD"
+        namespace = measurement.namespace or ""
+        if any(
+            not value.strip()
+            for value in (
+                namespace,
+                measurement.provider,
+                measurement.service,
+                measurement.operation,
+                measurement.unit,
+                currency,
+            )
+        ):
             raise ValueError("Usage accounting labels must not be blank")
         if quantity_value < 0 or (cost_value is not None and cost_value < 0):
             raise ValueError("Usage quantity and estimated cost must not be negative")
@@ -105,15 +131,15 @@ class UsageRecord:
             subject=identity.subject,
             tenant_id=identity.tenant_id,
             client_id=identity.client_id,
-            provider=provider,
-            service=service,
-            operation=operation,
-            sku=sku,
+            provider=measurement.provider,
+            service=measurement.service,
+            operation=measurement.operation,
+            sku=measurement.sku,
             quantity=str(quantity_value),
-            unit=unit,
+            unit=measurement.unit,
             estimated_cost=str(cost_value) if cost_value is not None else None,
             currency=currency.upper(),
-            pricing_version=pricing_version,
+            pricing_version=measurement.pricing_version,
         )
 
 
@@ -356,7 +382,13 @@ class OpenTelemetryRecorder:
         """
         if not self.metrics_enabled:
             return
-        attributes = self._invocation_attributes(invocation, outcome)
+        attributes: dict[str, Any] = {
+            "mcp.tool.name": invocation.tool_name,
+            "mcp.outcome": outcome,
+            "mcp.auth.method": invocation.identity.auth_method,
+        }
+        if self.include_tenant_metrics and invocation.identity.tenant_id:
+            attributes["mcp.tenant.id"] = invocation.identity.tenant_id
         self.tool_calls.add(1, attributes)
         self.tool_duration.record(duration_seconds, attributes)
         self.admission_wait.record(admission_wait_seconds, attributes)
@@ -414,22 +446,3 @@ class OpenTelemetryRecorder:
                 self.estimated_cost.add(float(record.estimated_cost), cost_attributes)
         if self.cost_accounting_enabled:
             await self.cost_sink.append(record)
-
-    def _invocation_attributes(self, invocation: InvocationContext, outcome: str) -> dict[str, Any]:
-        """Build bounded metric dimensions for one invocation.
-
-        Args:
-            invocation: Trusted invocation context.
-            outcome: Low-cardinality result classification.
-
-        Returns:
-            Metric-safe attribute mapping without subject or request identifiers.
-        """
-        attributes: dict[str, Any] = {
-            "mcp.tool.name": invocation.tool_name,
-            "mcp.outcome": outcome,
-            "mcp.auth.method": invocation.identity.auth_method,
-        }
-        if self.include_tenant_metrics and invocation.identity.tenant_id:
-            attributes["mcp.tenant.id"] = invocation.identity.tenant_id
-        return attributes

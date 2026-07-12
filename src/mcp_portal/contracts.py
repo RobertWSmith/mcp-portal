@@ -33,12 +33,13 @@ def fingerprint_tool_contract(tool: Tool) -> str:
     Returns:
         SHA-256 hash of the canonicalized contract payload.
     """
-    canonical = json.dumps(
-        tool_contract_payload(tool),
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            tool_contract_payload(tool),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def tool_contract_payload(tool: Tool) -> dict[str, Any]:
@@ -51,18 +52,21 @@ def tool_contract_payload(tool: Tool) -> dict[str, Any]:
         JSON-serializable contract fields visible to MCP clients.
     """
     dumped = tool.model_dump(mode="json", by_alias=True, exclude_none=True)
-    payload = {
-        "name": dumped.get("name"),
-        "title": dumped.get("title"),
-        "description": dumped.get("description"),
-        "inputSchema": dumped.get("inputSchema"),
-        "outputSchema": dumped.get("outputSchema"),
-        "icons": dumped.get("icons"),
-        "annotations": dumped.get("annotations"),
-        "execution": dumped.get("execution"),
-        "_meta": dumped.get("_meta"),
+    return {
+        key: value
+        for key, value in {
+            "name": dumped.get("name"),
+            "title": dumped.get("title"),
+            "description": dumped.get("description"),
+            "inputSchema": dumped.get("inputSchema"),
+            "outputSchema": dumped.get("outputSchema"),
+            "icons": dumped.get("icons"),
+            "annotations": dumped.get("annotations"),
+            "execution": dumped.get("execution"),
+            "_meta": dumped.get("_meta"),
+        }.items()
+        if value is not None
     }
-    return {key: value for key, value in payload.items() if value is not None}
 
 
 def compare_tool_contract_manifests(

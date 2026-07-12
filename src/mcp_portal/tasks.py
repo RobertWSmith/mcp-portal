@@ -63,12 +63,10 @@ class MemoryTaskStore:
             raise PermissionPortalError("Task creation requires an authenticated owner.")
         if ttl_seconds <= 0 or ttl_seconds > self.max_ttl_seconds:
             raise ValidationPortalError("Requested task TTL is outside the supported range.")
-        active = [
-            task
-            for task in self._tasks.values()
-            if task.owner == owner and task.status == "working"
-        ]
-        if len(active) >= self.max_per_owner:
+        if (
+            sum(task.owner == owner and task.status == "working" for task in self._tasks.values())
+            >= self.max_per_owner
+        ):
             raise PermissionPortalError("Concurrent task limit exceeded.")
         now = datetime.now(timezone.utc)
         task = PortalTask(
@@ -120,8 +118,7 @@ class MemoryTaskStore:
         Returns:
             Updated immutable task value.
         """
-        task = self.get(task_id, owner, tenant_id)
-        updated = replace(task, status=status, result=result)
+        updated = replace(self.get(task_id, owner, tenant_id), status=status, result=result)
         self._tasks[task_id] = updated
         return updated
 
@@ -145,6 +142,5 @@ class MemoryTaskStore:
     def cleanup(self) -> None:
         """Delete tasks whose configured retention period has elapsed."""
         now = datetime.now(timezone.utc)
-        expired = [task_id for task_id, task in self._tasks.items() if task.expires_at <= now]
-        for task_id in expired:
+        for task_id in [task_id for task_id, task in self._tasks.items() if task.expires_at <= now]:
             del self._tasks[task_id]

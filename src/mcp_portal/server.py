@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-# ruff: noqa: E402
-
 import argparse
+from dataclasses import dataclass, replace
 import inspect
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 import sys
@@ -36,13 +35,13 @@ from mcp_portal.auth import (
     create_auth_provider,
 )
 from mcp_portal.approvals import ApprovalVerifier, RejectingApprovalVerifier
-from mcp_portal.audit import AuditSink, LoggingAuditSink, audit_event
+from mcp_portal.audit import AuditDetails, AuditSink, LoggingAuditSink, audit_event
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
-from mcp_portal.debug_ui import create_debug_app
 from mcp_portal.errors import PermissionPortalError, TimeoutPortalError, UpstreamPortalError
 from mcp_portal.namespaces import (
     Namespace,
+    NamespaceDependencies,
     NamespaceProvider,
     build_namespace_runtimes,
     iter_namespaces,
@@ -53,12 +52,101 @@ from mcp_portal.observability import (
 )
 from mcp_portal.policy import PolicyDecision, PolicyEngine, ScopePolicyEngine
 from mcp_portal.resilience import AdmissionController, QuotaBackend
-from mcp_portal.security import identity_from_access_token, invocation_scope, new_invocation
+from mcp_portal.security import (
+    InvocationContext,
+    identity_from_access_token,
+    invocation_scope,
+    new_invocation,
+)
 from mcp_portal.tasks import MemoryTaskStore
 from mcp_portal.telemetry import CostSink, TelemetryRecorder
 
 Transport = Literal["stdio", "http", "sse", "streamable-http"]
 HTTP_TRANSPORTS: set[Transport] = {"http", "sse", "streamable-http"}
+
+
+@dataclass(frozen=True)
+class PortalDependencies:
+    """Optional service adapters injected into a portal server.
+
+    Attributes:
+        clients: Shared external client registry.
+        policy_engine: Authorization policy adapter.
+        audit_sink: Append-only audit destination.
+        quota_backend: Shared quota backend.
+        approval_verifier: Out-of-band approval verifier.
+        task_store: Authorization-bound task store.
+        telemetry: Metrics and cost-accounting recorder.
+        cost_sink: Detailed cost-accounting destination.
+    """
+
+    clients: ClientFactories | None = None
+    policy_engine: PolicyEngine | None = None
+    audit_sink: AuditSink | None = None
+    quota_backend: QuotaBackend | None = None
+    approval_verifier: ApprovalVerifier | None = None
+    task_store: MemoryTaskStore | None = None
+    telemetry: TelemetryRecorder | None = None
+    cost_sink: CostSink | None = None
+
+
+@dataclass(frozen=True)
+class _ToolCall:
+    """Trusted state shared by tool-invocation pipeline stages.
+
+    Attributes:
+        name: Mounted MCP tool name.
+        arguments: Validated invocation arguments.
+        tool: Registered FastMCP tool.
+        invocation: Trusted request and identity context.
+        started: Monotonic invocation start time.
+    """
+
+    name: str
+    arguments: dict[str, Any]
+    tool: Tool
+    invocation: InvocationContext
+    started: float
+
+
+@dataclass(frozen=True)
+class _TransportOverrides:
+    """Optional SDK transport settings supplied by compatibility callers.
+
+    Attributes:
+        host: Optional HTTP bind host.
+        port: Optional HTTP bind port.
+        path: Optional HTTP endpoint path.
+        log_level: Optional SDK log level.
+        json_response: Optional JSON response mode.
+        stateless: Optional stateless HTTP mode.
+    """
+
+    host: str | None = None
+    port: int | None = None
+    path: str | None = None
+    log_level: str | None = None
+    json_response: bool | None = None
+    stateless: bool | None = None
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> "_TransportOverrides":
+        """Build supported overrides while ignoring compatibility-only keywords.
+
+        Args:
+            values: Arbitrary legacy transport keyword mapping.
+
+        Returns:
+            Normalized supported transport overrides.
+        """
+        return cls(
+            host=values.get("host"),
+            port=values.get("port"),
+            path=values.get("path"),
+            log_level=values.get("log_level"),
+            json_response=values.get("json_response"),
+            stateless=values.get("stateless"),
+        )
 
 
 class PortalFastMCP(FastMCP):
@@ -68,11 +156,7 @@ class PortalFastMCP(FastMCP):
         self,
         *args: Any,
         portal_settings: Settings | None = None,
-        policy_engine: PolicyEngine | None = None,
-        audit_sink: AuditSink | None = None,
-        quota_backend: QuotaBackend | None = None,
-        approval_verifier: ApprovalVerifier | None = None,
-        telemetry: TelemetryRecorder | None = None,
+        dependencies: PortalDependencies | None = None,
         enforce_request_controls: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -81,24 +165,28 @@ class PortalFastMCP(FastMCP):
         Args:
             args: Positional SDK server arguments.
             portal_settings: Portal configuration used by enforcement layers.
-            policy_engine: Optional external authorization policy adapter.
-            audit_sink: Optional append-only audit destination.
-            quota_backend: Optional distributed quota implementation.
-            approval_verifier: Optional out-of-band approval receipt verifier.
-            telemetry: Optional shared metrics and cost-accounting recorder.
+            dependencies: Optional injected service adapters.
             enforce_request_controls: Whether rate and size controls are active.
             kwargs: Keyword SDK server arguments.
         """
         selected_settings = portal_settings or Settings.from_env()
+        selected_dependencies = dependencies or PortalDependencies()
         self.portal_settings = selected_settings
-        self.policy_engine = policy_engine or ScopePolicyEngine(selected_settings)
-        self.audit_sink = audit_sink or LoggingAuditSink()
+        self.policy_engine = selected_dependencies.policy_engine or ScopePolicyEngine(
+            selected_settings
+        )
+        self.audit_sink = selected_dependencies.audit_sink or LoggingAuditSink()
         self.enforce_request_controls = enforce_request_controls
-        self.approval_verifier = approval_verifier or RejectingApprovalVerifier()
-        self.telemetry = telemetry or create_telemetry_recorder(selected_settings)
+        self.approval_verifier = (
+            selected_dependencies.approval_verifier or RejectingApprovalVerifier()
+        )
+        self.telemetry = selected_dependencies.telemetry or create_telemetry_recorder(
+            selected_settings, cost_sink=selected_dependencies.cost_sink
+        )
         self._component_namespaces: dict[tuple[str, str], Namespace] = {}
         self.admission = AdmissionController(
-            selected_settings.enterprise.max_concurrent_requests, quota_backend
+            selected_settings.enterprise.max_concurrent_requests,
+            selected_dependencies.quota_backend,
         )
         super().__init__(*args, **kwargs)
 
@@ -113,9 +201,12 @@ class PortalFastMCP(FastMCP):
             tool = self._tool_manager.get_tool(exposed_tool.name)
             if tool is None:
                 continue
-            task_support = (tool.meta or {}).get("task_support", "forbidden")
             exposed_tool = exposed_tool.model_copy(
-                update={"execution": ToolExecution(taskSupport=task_support)}
+                update={
+                    "execution": ToolExecution(
+                        taskSupport=(tool.meta or {}).get("task_support", "forbidden")
+                    )
+                }
             )
             invocation = new_invocation(
                 exposed_tool.name,
@@ -285,115 +376,213 @@ class PortalFastMCP(FastMCP):
         if tool is None:
             return await super().call_tool(name, arguments)
 
-        invocation = new_invocation(
-            name,
-            self.portal_settings.enterprise.tenant_claim,
-            self.portal_settings.enterprise.tool_timeout(name, tool.meta),
+        call = _ToolCall(
+            name=name,
+            arguments=arguments,
+            tool=tool,
+            invocation=new_invocation(
+                name,
+                self.portal_settings.enterprise.tenant_claim,
+                self.portal_settings.enterprise.tool_timeout(name, tool.meta),
+            ),
+            started=time.perf_counter(),
         )
-        tool_concurrency = self.portal_settings.enterprise.tool_concurrency(name, tool.meta)
-        started = time.perf_counter()
-        with invocation_scope(invocation):
-            decision = await self.policy_engine.authorize(invocation, tool, arguments)
-            if self.portal_settings.enterprise.audit_enabled:
-                await self.audit_sink.append(
-                    audit_event("authorization", invocation, arguments, decision=decision)
-                )
-            if not decision.allowed:
-                self.telemetry.record_tool_call(
-                    invocation,
-                    outcome="denied",
-                    duration_seconds=time.perf_counter() - started,
-                )
-                raise PermissionPortalError(
-                    "Tool invocation is not authorized.",
-                    details={"required_scopes": sorted(decision.required_scopes)},
-                )
-            if (
-                "approval_required" in decision.obligations
-                and not await self.approval_verifier.verify(invocation, tool, arguments)
-            ):
-                if self.portal_settings.enterprise.audit_enabled:
-                    await self.audit_sink.append(
-                        audit_event(
-                            "approval",
-                            invocation,
-                            arguments,
-                            decision=PolicyDecision(False, "approval receipt missing or invalid"),
-                        )
-                    )
-                self.telemetry.record_tool_call(
-                    invocation,
-                    outcome="denied",
-                    duration_seconds=time.perf_counter() - started,
-                )
-                raise PermissionPortalError(
-                    "Destructive tool invocation requires an approved out-of-band receipt."
-                )
+        with invocation_scope(call.invocation):
+            decision = await self._authorize_tool_call(call)
+            await self._verify_tool_approval(call, decision)
+            await self._enforce_tool_quota(call)
+            return await self._execute_tool_call(call)
 
-            subject = invocation.identity.subject or invocation.identity.client_id or "anonymous"
-            quota_key = f"{invocation.identity.tenant_id or '-'}:{subject}:{name}"
-            if self.enforce_request_controls:
-                try:
-                    await self.admission.check_quota(
-                        quota_key,
-                        self.portal_settings.middleware.rate_limit_per_second,
-                        self.portal_settings.middleware.rate_limit_burst,
-                    )
-                except PermissionPortalError:
-                    self.telemetry.record_tool_call(
-                        invocation,
-                        outcome="quota_rejected",
-                        duration_seconds=time.perf_counter() - started,
-                    )
-                    raise
+    async def _authorize_tool_call(self, call: _ToolCall) -> PolicyDecision:
+        """Authorize and audit one tool invocation.
 
-            outcome = "succeeded"
-            admission_started = time.perf_counter()
-            admission_wait_seconds = 0.0
-            try:
-                with anyio.fail_after(invocation.deadline_seconds):
-                    async with self.admission.capacity_for(name, tool_concurrency):
-                        admission_wait_seconds = time.perf_counter() - admission_started
-                        result = await super().call_tool(name, arguments)
-                if (
-                    self.enforce_request_controls
-                    and self.portal_settings.middleware.response_max_bytes > 0
+        Args:
+            call: Trusted invocation state.
+
+        Returns:
+            The allowing policy decision.
+
+        Raises:
+            PermissionPortalError: If policy denies the invocation.
+        """
+        decision = await self.policy_engine.authorize(call.invocation, call.tool, call.arguments)
+        if self.portal_settings.enterprise.audit_enabled:
+            await self.audit_sink.append(
+                audit_event(
+                    "authorization",
+                    call.invocation,
+                    call.arguments,
+                    AuditDetails(decision=decision),
+                )
+            )
+        if decision.allowed:
+            return decision
+
+        self._record_rejected_tool_call(call, "denied")
+        raise PermissionPortalError(
+            "Tool invocation is not authorized.",
+            details={"required_scopes": sorted(decision.required_scopes)},
+        )
+
+    async def _verify_tool_approval(self, call: _ToolCall, decision: PolicyDecision) -> None:
+        """Verify any approval obligation attached by policy.
+
+        Args:
+            call: Trusted invocation state.
+            decision: Allowing policy decision and its obligations.
+
+        Raises:
+            PermissionPortalError: If a required approval is absent or invalid.
+        """
+        if "approval_required" not in decision.obligations or await self.approval_verifier.verify(
+            call.invocation, call.tool, call.arguments
+        ):
+            return
+
+        if self.portal_settings.enterprise.audit_enabled:
+            await self.audit_sink.append(
+                audit_event(
+                    "approval",
+                    call.invocation,
+                    call.arguments,
+                    AuditDetails(
+                        decision=PolicyDecision(False, "approval receipt missing or invalid")
+                    ),
+                )
+            )
+        self._record_rejected_tool_call(call, "denied")
+        raise PermissionPortalError(
+            "Destructive tool invocation requires an approved out-of-band receipt."
+        )
+
+    async def _enforce_tool_quota(self, call: _ToolCall) -> None:
+        """Apply configured request quota controls.
+
+        Args:
+            call: Trusted invocation state.
+
+        Raises:
+            PermissionPortalError: If the caller's quota is exhausted.
+        """
+        if not self.enforce_request_controls:
+            return
+
+        identity = call.invocation.identity
+        actor = identity.subject or identity.client_id or "anonymous"
+        quota_key = f"{identity.tenant_id or '-'}:{actor}:{call.name}"
+        try:
+            await self.admission.check_quota(
+                quota_key,
+                self.portal_settings.middleware.rate_limit_per_second,
+                self.portal_settings.middleware.rate_limit_burst,
+            )
+        except PermissionPortalError:
+            self._record_rejected_tool_call(call, "quota_rejected")
+            raise
+
+    async def _execute_tool_call(self, call: _ToolCall) -> Any:
+        """Execute a tool under deadline, capacity, response, and telemetry controls.
+
+        Args:
+            call: Trusted invocation state.
+
+        Returns:
+            MCP content returned by the underlying SDK tool handler.
+
+        Raises:
+            TimeoutPortalError: If execution exceeds its deadline.
+            UpstreamPortalError: If the serialized response exceeds its size limit.
+        """
+        outcome = "succeeded"
+        admission_started = time.perf_counter()
+        admission_wait_seconds = 0.0
+        try:
+            with anyio.fail_after(call.invocation.deadline_seconds):
+                async with self.admission.capacity_for(
+                    call.name,
+                    self.portal_settings.enterprise.tool_concurrency(call.name, call.tool.meta),
                 ):
-                    size = len(json.dumps(result, default=str).encode("utf-8"))
-                    if size > self.portal_settings.middleware.response_max_bytes:
-                        raise UpstreamPortalError(
-                            "Tool response exceeded the configured size limit.",
-                            details={"size": size},
-                        )
-                return result
-            except TimeoutError as error:
-                outcome = "timed_out"
-                raise TimeoutPortalError(
-                    "Tool execution exceeded its deadline.", cause=error
-                ) from error
-            except Exception:
-                outcome = "failed"
-                raise
-            finally:
-                duration_ms = (time.perf_counter() - started) * 1000
-                if admission_wait_seconds == 0:
                     admission_wait_seconds = time.perf_counter() - admission_started
-                self.telemetry.record_tool_call(
-                    invocation,
-                    outcome=outcome,
-                    duration_seconds=duration_ms / 1000,
-                    admission_wait_seconds=admission_wait_seconds,
+                    result = await super().call_tool(call.name, call.arguments)
+            self._validate_tool_response_size(result)
+            return result
+        except TimeoutError as error:
+            outcome = "timed_out"
+            raise TimeoutPortalError(
+                "Tool execution exceeded its deadline.", cause=error
+            ) from error
+        except Exception:
+            outcome = "failed"
+            raise
+        finally:
+            duration_ms = (time.perf_counter() - call.started) * 1000
+            if admission_wait_seconds == 0:
+                admission_wait_seconds = time.perf_counter() - admission_started
+            await self._record_tool_completion(call, outcome, duration_ms, admission_wait_seconds)
+
+    def _validate_tool_response_size(self, result: Any) -> None:
+        """Reject a serialized tool response that exceeds its configured limit.
+
+        Args:
+            result: Tool response to measure.
+
+        Raises:
+            UpstreamPortalError: If the response is too large.
+        """
+        maximum_bytes = self.portal_settings.middleware.response_max_bytes
+        if not self.enforce_request_controls or maximum_bytes <= 0:
+            return
+
+        response_bytes = len(json.dumps(result, default=str).encode("utf-8"))
+        if response_bytes > maximum_bytes:
+            raise UpstreamPortalError(
+                "Tool response exceeded the configured size limit.",
+                details={"size": response_bytes},
+            )
+
+    def _record_rejected_tool_call(self, call: _ToolCall, outcome: str) -> None:
+        """Record telemetry for a rejected invocation.
+
+        Args:
+            call: Trusted invocation state.
+            outcome: Rejection classification.
+        """
+        self.telemetry.record_tool_call(
+            call.invocation,
+            outcome=outcome,
+            duration_seconds=time.perf_counter() - call.started,
+        )
+
+    async def _record_tool_completion(
+        self,
+        call: _ToolCall,
+        outcome: str,
+        duration_ms: float,
+        admission_wait_seconds: float,
+    ) -> None:
+        """Record completion telemetry and audit metadata.
+
+        Args:
+            call: Trusted invocation state.
+            outcome: Execution result classification.
+            duration_ms: Total invocation duration in milliseconds.
+            admission_wait_seconds: Time spent awaiting execution capacity.
+        """
+        self.telemetry.record_tool_call(
+            call.invocation,
+            outcome=outcome,
+            duration_seconds=duration_ms / 1000,
+            admission_wait_seconds=admission_wait_seconds,
+        )
+        if self.portal_settings.enterprise.audit_enabled:
+            await self.audit_sink.append(
+                audit_event(
+                    "completion",
+                    call.invocation,
+                    call.arguments,
+                    AuditDetails(outcome=outcome, duration_ms=duration_ms),
                 )
-                if self.portal_settings.enterprise.audit_enabled:
-                    await self.audit_sink.append(
-                        audit_event(
-                            "completion",
-                            invocation,
-                            arguments,
-                            outcome=outcome,
-                            duration_ms=duration_ms,
-                        )
-                    )
+            )
 
     def http_app(
         self,
@@ -414,9 +603,11 @@ class PortalFastMCP(FastMCP):
         """
         _apply_transport_settings(
             self,
-            path=path,
-            json_response=json_response,
-            stateless=stateless_http,
+            _TransportOverrides(
+                path=path,
+                json_response=json_response,
+                stateless=stateless_http,
+            ),
         )
         return self.streamable_http_app()
 
@@ -449,12 +640,15 @@ class PortalFastMCP(FastMCP):
         mount_path = None
 
         if selected_transport in HTTP_TRANSPORTS:
-            _apply_transport_settings(self, **transport_kwargs)
+            overrides = _TransportOverrides.from_mapping(transport_kwargs)
+            _apply_transport_settings(self, overrides)
             if selected_transport == "sse":
-                mount_path = transport_kwargs.get("path")
+                mount_path = overrides.path
 
-        sdk_transport = "streamable-http" if selected_transport == "http" else selected_transport
-        super().run(sdk_transport, mount_path=mount_path)
+        super().run(
+            "streamable-http" if selected_transport == "http" else selected_transport,
+            mount_path=mount_path,
+        )
 
 
 def _governed_tool(tool: Tool, name: str, namespace: Namespace | str | None) -> Tool:
@@ -494,7 +688,12 @@ def _governed_tool(tool: Tool, name: str, namespace: Namespace | str | None) -> 
             }
         )
     return tool.model_copy(
-        update={"name": name, "title": title, "annotations": annotations, "meta": meta}
+        update={
+            "name": name,
+            "title": title,
+            "annotations": annotations,
+            "meta": meta,
+        }
     )
 
 
@@ -563,8 +762,9 @@ def _install_provider_components(
             meta=dict(contribution.meta),
         )(contribution.function)
         if isinstance(target, PortalFastMCP) and isinstance(namespace, Namespace):
-            component_type = "template" if contribution.is_template else "resource"
-            target._component_namespaces[(component_type, contribution.uri)] = namespace
+            target._component_namespaces[
+                ("template" if contribution.is_template else "resource", contribution.uri)
+            ] = namespace
 
     for contribution in provider.prompts:
         name = f"{prefix}{contribution.name or contribution.function.__name__}"
@@ -580,39 +780,26 @@ def _install_provider_components(
 
 def _apply_transport_settings(
     server: FastMCP,
-    *,
-    host: str | None = None,
-    port: int | None = None,
-    path: str | None = None,
-    log_level: str | None = None,
-    json_response: bool | None = None,
-    stateless: bool | None = None,
-    **_: Any,
+    overrides: _TransportOverrides,
 ) -> None:
     """Apply previous FastMCP run kwargs to SDK server settings.
 
     Args:
         server: SDK FastMCP server to mutate before launch.
-        host: Optional HTTP host override.
-        port: Optional HTTP port override.
-        path: Optional streamable HTTP path override.
-        log_level: Optional server log level override.
-        json_response: Optional JSON response mode override.
-        stateless: Optional stateless HTTP mode override.
-        _: Ignored compatibility keyword arguments.
+        overrides: Supported normalized transport overrides.
     """
-    if host is not None:
-        server.settings.host = host
-    if port is not None:
-        server.settings.port = port
-    if path is not None:
-        server.settings.streamable_http_path = path
-    if log_level is not None:
-        server.settings.log_level = log_level.upper()
-    if json_response is not None:
-        server.settings.json_response = json_response
-    if stateless is not None:
-        server.settings.stateless_http = stateless
+    if overrides.host is not None:
+        server.settings.host = overrides.host
+    if overrides.port is not None:
+        server.settings.port = overrides.port
+    if overrides.path is not None:
+        server.settings.streamable_http_path = overrides.path
+    if overrides.log_level is not None:
+        server.settings.log_level = overrides.log_level.upper()
+    if overrides.json_response is not None:
+        server.settings.json_response = overrides.json_response
+    if overrides.stateless is not None:
+        server.settings.stateless_http = overrides.stateless
 
 
 def _sdk_auth_settings(settings: Settings) -> SdkAuthSettings | None:
@@ -634,11 +821,11 @@ def _sdk_auth_settings(settings: Settings) -> SdkAuthSettings | None:
     resource_path = settings.http.path
     if not resource_path.startswith("/"):
         resource_path = f"/{resource_path}"
-    resource_server_url = settings.auth.resource_server_url or f"http://localhost{resource_path}"
-
     return SdkAuthSettings(
         issuer_url=issuer_url,
-        resource_server_url=resource_server_url,
+        resource_server_url=(
+            settings.auth.resource_server_url or f"http://localhost{resource_path}"
+        ),
         required_scopes=list(settings.auth.required_scopes),
     )
 
@@ -646,16 +833,8 @@ def _sdk_auth_settings(settings: Settings) -> SdkAuthSettings | None:
 def create_mcp(
     settings: Settings | None = None,
     namespaces: Sequence[Namespace] | None = None,
-    include_debug_ui: bool = True,
     include_production_middleware: bool | None = None,
-    clients: ClientFactories | None = None,
-    policy_engine: PolicyEngine | None = None,
-    audit_sink: AuditSink | None = None,
-    quota_backend: QuotaBackend | None = None,
-    approval_verifier: ApprovalVerifier | None = None,
-    task_store: MemoryTaskStore | None = None,
-    telemetry: TelemetryRecorder | None = None,
-    cost_sink: CostSink | None = None,
+    dependencies: PortalDependencies | None = None,
 ) -> FastMCP:
     """Create the top-level FastMCP server and mount namespace servers.
 
@@ -663,66 +842,64 @@ def create_mcp(
         settings: Optional settings object. When omitted, settings are loaded from the
             environment.
         namespaces: Optional namespace registry. When omitted, the default namespaces are used.
-        include_debug_ui: Whether to add development debug tools.
         include_production_middleware: Retained for CLI compatibility. The SDK
             FastMCP server does not expose FastMCP 3 middleware hooks.
-        clients: Optional shared client factory registry.
-        policy_engine: Optional external authorization policy adapter.
-        audit_sink: Optional append-only audit destination.
-        quota_backend: Optional shared quota backend.
-        approval_verifier: Optional approval receipt verifier.
-        task_store: Optional shared authorization-bound task store.
-        telemetry: Optional metrics and cost-accounting recorder.
-        cost_sink: Optional detailed accounting destination used by the default recorder.
+        dependencies: Optional service adapters for external clients, authorization,
+            audit, quotas, approvals, tasks, telemetry, and cost accounting.
 
     Returns:
         A configured FastMCP server with all namespace servers mounted.
     """
     settings = settings or Settings.from_env()
+    dependencies = dependencies or PortalDependencies()
     configure_observability_environment(settings)
-    shared_telemetry = telemetry or create_telemetry_recorder(settings, cost_sink=cost_sink)
+    shared_telemetry = dependencies.telemetry or create_telemetry_recorder(
+        settings, cost_sink=dependencies.cost_sink
+    )
     namespace_manifests = tuple(
         namespaces or iter_namespaces(strict=settings.namespace_discovery.strict)
     )
     if settings.enterprise.namespace_allowlist:
-        approved = frozenset(settings.enterprise.namespace_allowlist)
         namespace_manifests = tuple(
-            namespace for namespace in namespace_manifests if namespace.name in approved
+            namespace
+            for namespace in namespace_manifests
+            if namespace.name in settings.enterprise.namespace_allowlist
         )
     shared_clients = (
-        clients.with_resilience(settings, telemetry=shared_telemetry)
-        if clients is not None
+        dependencies.clients.with_resilience(settings, telemetry=shared_telemetry)
+        if dependencies.clients is not None
         else default_client_factories(settings, telemetry=shared_telemetry)
     )
     namespace_runtimes = build_namespace_runtimes(
         namespace_manifests,
         settings,
-        clients=shared_clients,
-        tasks=task_store,
-        telemetry=shared_telemetry,
+        NamespaceDependencies(
+            clients=shared_clients,
+            tasks=dependencies.task_store,
+            telemetry=shared_telemetry,
+        ),
     )
-    auth_provider = create_auth_provider(settings)
-    enforce_request_controls = (
-        settings.middleware.enabled
-        if include_production_middleware is None
-        else include_production_middleware
+    runtime_dependencies = replace(
+        dependencies,
+        clients=shared_clients,
+        telemetry=shared_telemetry,
     )
     server = PortalFastMCP(
         name="MCP Portal",
         instructions="Use namespaced tools for portal capabilities.",
         auth=_sdk_auth_settings(settings),
-        token_verifier=auth_provider,
+        token_verifier=create_auth_provider(settings),
         streamable_http_path=settings.http.path,
         json_response=bool(settings.http.json_response),
         stateless_http=bool(settings.http.stateless),
         lifespan=create_portal_lifespan(shared_clients),
         portal_settings=settings,
-        policy_engine=policy_engine,
-        audit_sink=audit_sink,
-        quota_backend=quota_backend,
-        approval_verifier=approval_verifier,
-        telemetry=shared_telemetry,
-        enforce_request_controls=enforce_request_controls,
+        dependencies=runtime_dependencies,
+        enforce_request_controls=(
+            settings.middleware.enabled
+            if include_production_middleware is None
+            else include_production_middleware
+        ),
     )
     server.namespace_runtimes = namespace_runtimes
     server.clients = shared_clients
@@ -734,25 +911,20 @@ def create_mcp(
 
         server.mount(runtime.namespace.create(runtime.context), namespace=runtime.namespace)
 
-    if include_debug_ui:
-        server.add_provider(create_debug_app(settings, namespace_runtimes))
-
     return server
 
 
 def create_production_mcp(
     settings: Settings | None = None,
     *,
-    telemetry: TelemetryRecorder | None = None,
-    cost_sink: CostSink | None = None,
+    dependencies: PortalDependencies | None = None,
 ) -> FastMCP:
     """Create the production FastMCP server.
 
     Args:
         settings: Optional settings object. When omitted, settings are loaded from the
             environment.
-        telemetry: Optional metrics and cost-accounting recorder.
-        cost_sink: Optional detailed accounting destination used by the default recorder.
+        dependencies: Optional service adapters for production integrations.
 
     Returns:
         A configured production server without development UI providers.
@@ -761,10 +933,8 @@ def create_production_mcp(
     selected_settings.validate_production()
     server = create_mcp(
         selected_settings,
-        include_debug_ui=False,
         include_production_middleware=True,
-        telemetry=telemetry,
-        cost_sink=cost_sink,
+        dependencies=dependencies,
     )
     add_operational_routes(server, selected_settings)
     return server
@@ -908,7 +1078,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--production",
         action="store_true",
-        help="Use the production server profile: no debug tools and an operational health route.",
+        help="Use the production server profile with an operational health route.",
     )
 
     banner_group = parser.add_mutually_exclusive_group()
@@ -924,21 +1094,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="show_banner",
         action="store_false",
         help="Hide FastMCP's server banner.",
-    )
-
-    debug_ui_group = parser.add_mutually_exclusive_group()
-    debug_ui_group.add_argument(
-        "--debug-ui",
-        dest="debug_ui",
-        action="store_true",
-        default=True,
-        help="Include MCP Portal debug tools. Enabled by default.",
-    )
-    debug_ui_group.add_argument(
-        "--no-debug-ui",
-        dest="debug_ui",
-        action="store_false",
-        help="Run without MCP Portal debug tools.",
     )
 
     json_group = parser.add_mutually_exclusive_group()
@@ -981,39 +1136,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         argv: Optional command-line arguments. When omitted, arguments are read from
             `sys.argv`.
     """
-    options = _parse_args(argv)
-    server = _server_for_cli_options(options)
-
-    server.run(
-        transport=options.transport,
-        show_banner=options.show_banner,
-        **_transport_kwargs(options),
-    )
-
-
-def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
-    """Parse and validate command-line arguments.
-
-    Args:
-        argv: Optional command-line arguments. When omitted, arguments are read from
-            `sys.argv`.
-
-    Returns:
-        Parsed command-line options.
-    """
     parser = build_arg_parser()
     options = parser.parse_args(argv)
-    _validate_options(parser, options)
-    return options
 
-
-def _validate_options(parser: argparse.ArgumentParser, options: argparse.Namespace) -> None:
-    """Validate option combinations that depend on the selected transport.
-
-    Args:
-        parser: Parser used to report user-facing command errors.
-        options: Parsed command-line options.
-    """
     if options.transport == "stdio":
         invalid_flags = [
             flag
@@ -1026,59 +1151,43 @@ def _validate_options(parser: argparse.ArgumentParser, options: argparse.Namespa
             if value is not None
         ]
         if invalid_flags:
-            flags = ", ".join(invalid_flags)
-            parser.error(f"{flags} require --transport http, sse, or streamable-http")
+            parser.error(
+                f"{', '.join(invalid_flags)} require --transport http, sse, or streamable-http"
+            )
 
     if options.transport == "sse" and options.stateless is True:
         parser.error("--stateless is not supported with --transport sse")
 
-
-def _server_for_cli_options(options: argparse.Namespace) -> FastMCP:
-    """Return the server instance to run for the parsed options.
-
-    Args:
-        options: Parsed command-line options.
-
-    Returns:
-        The default module server or a freshly configured server when options require it.
-    """
     if options.production:
-        return create_production_mcp(
+        server = create_production_mcp(
             Settings.from_env(options.env_file, override=options.env_file is not None)
         )
+    elif options.env_file is None:
+        server = mcp
+    else:
+        server = create_mcp(
+            Settings.from_env(options.env_file, override=options.env_file is not None),
+        )
 
-    if options.env_file is None and options.debug_ui:
-        return mcp
-
-    return create_mcp(
-        Settings.from_env(options.env_file, override=options.env_file is not None),
-        include_debug_ui=options.debug_ui,
-    )
-
-
-def _transport_kwargs(options: argparse.Namespace) -> dict[str, Any]:
-    """Build FastMCP transport keyword arguments from parsed options.
-
-    Args:
-        options: Parsed command-line options.
-
-    Returns:
-        Keyword arguments safe to pass to `FastMCP.run`.
-    """
-    kwargs: dict[str, Any] = {}
-
+    transport_options: dict[str, Any] = {}
     if options.log_level is not None:
-        kwargs["log_level"] = options.log_level
+        transport_options["log_level"] = options.log_level
     if options.stateless is not None:
-        kwargs["stateless"] = options.stateless
-
+        transport_options["stateless"] = options.stateless
     if options.transport in HTTP_TRANSPORTS:
-        for name in ("host", "port", "path", "json_response"):
-            value = getattr(options, name)
-            if value is not None:
-                kwargs[name] = value
+        transport_options.update(
+            {
+                name: value
+                for name in ("host", "port", "path", "json_response")
+                if (value := getattr(options, name)) is not None
+            }
+        )
 
-    return kwargs
+    server.run(
+        transport=options.transport,
+        show_banner=options.show_banner,
+        **transport_options,
+    )
 
 
 if __name__ == "__main__":

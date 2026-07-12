@@ -110,9 +110,8 @@ class AdmissionController:
         if configured != maximum_concurrency:
             raise ValueError(f"Concurrency limit for {tool_name!r} changed after startup")
         self._tool_capacities[tool_name] = (configured, tool_capacity)
-        async with tool_capacity:
-            async with self.capacity:
-                yield
+        async with tool_capacity, self.capacity:
+            yield
 
     async def check_quota(self, key: str, rate: float, burst: int) -> None:
         """Reject an invocation when its quota partition is exhausted.

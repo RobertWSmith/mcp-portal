@@ -13,6 +13,7 @@ from mcp_portal.egress import EgressPolicy
 from mcp_portal.errors import PermissionPortalError, ValidationPortalError
 from mcp_portal.errors import ConfigurationPortalError
 from mcp_portal.policy import ScopePolicyEngine
+from mcp_portal.namespaces import NamespaceDependencies
 from mcp_portal.security import InvocationContext, InvocationIdentity, invocation_scope
 from mcp_portal.tasks import MemoryTaskStore
 from mcp_portal.tenancy import (
@@ -257,7 +258,9 @@ class FakeBroker:
 async def test_namespace_context_exposes_only_invocation_bound_facades() -> None:
     connectors = FakeConnectors()
     context = create_namespace_test_context(
-        clients=ClientFactories({"langchain_mongodb": lambda: connectors})
+        dependencies=NamespaceDependencies(
+            clients=ClientFactories({"langchain_mongodb": lambda: connectors})
+        )
     )
     context = replace(
         context,
@@ -330,8 +333,7 @@ async def test_cross_tenant_override_requires_explicit_admin_scope() -> None:
 
 def test_production_validation_requires_auth_for_tenant_isolation() -> None:
     settings = replace(create_test_settings(), enterprise=EnterpriseSettings(require_tenant=True))
-    with pytest.raises(PermissionPortalError):
-        with invocation_scope(invocation(None)):
-            create_namespace_test_context(settings=settings).tenant_scope()
+    with pytest.raises(PermissionPortalError), invocation_scope(invocation(None)):
+        create_namespace_test_context(settings=settings).tenant_scope()
     with pytest.raises(ConfigurationPortalError, match="unsafe"):
         settings.validate_production()

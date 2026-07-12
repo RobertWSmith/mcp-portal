@@ -47,13 +47,14 @@ class TenantScope:
         if require_tenant and not identity.tenant_id:
             raise PermissionPortalError("A verified tenant claim is required.")
         tenant_seed = identity.tenant_id or "single-tenant"
-        actor_seed = identity.subject or identity.client_id or "anonymous"
         return cls(
             tenant_id=identity.tenant_id,
             subject=identity.subject,
             client_id=identity.client_id,
             partition=_partition_token("tenant", tenant_seed),
-            subject_partition=_partition_token("subject", f"{tenant_seed}\0{actor_seed}"),
+            subject_partition=_partition_token(
+                "subject", f"{tenant_seed}\0{identity.subject or identity.client_id or 'anonymous'}"
+            ),
         )
 
     @property
@@ -81,8 +82,7 @@ class TenantScope:
         normalized = value.strip()
         if not normalized or len(normalized) > 512:
             raise ValidationPortalError("Tenant-scoped keys must contain 1 to 512 characters.")
-        prefix = self.subject_partition if subject_scoped else self.partition
-        return f"{prefix}:{normalized}"
+        return f"{self.subject_partition if subject_scoped else self.partition}:{normalized}"
 
     def mongo_filter(self, query: dict[str, Any] | None = None) -> dict[str, Any]:
         """Combine a MongoDB query with the trusted tenant partition.
@@ -487,8 +487,9 @@ class TenantMongoDBConnectors:
         Returns:
             Configured MongoDB loader.
         """
-        existing = kwargs.pop("filter_criteria", None)
-        return self.connectors.loader(filter_criteria=self.scope.mongo_filter(existing), **kwargs)
+        return self.connectors.loader(
+            filter_criteria=self.scope.mongo_filter(kwargs.pop("filter_criteria", None)), **kwargs
+        )
 
 
 def _partition_token(kind: str, value: str) -> str:
