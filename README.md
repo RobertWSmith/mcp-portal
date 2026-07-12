@@ -217,7 +217,21 @@ tenant/request accounting records are kept separate from low-cardinality dashboa
 
 ## Contracts
 
-Tool contracts can be fingerprinted in CI to catch accidental schema drift:
+CI strictly validates committed namespace ownership and lifecycle metadata and compares tool
+contracts with `contracts/tool-contracts.json`:
+
+```powershell
+python -m mcp_portal.governance check
+```
+
+After intentionally reviewing a tool addition, removal, schema change, or permission expansion,
+update and commit the baseline with:
+
+```powershell
+python -m mcp_portal.governance update-baseline
+```
+
+Tool contracts can also be fingerprinted programmatically:
 
 ```python
 from mcp_portal.contracts import generate_tool_contract_manifest

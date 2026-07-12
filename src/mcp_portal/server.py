@@ -60,7 +60,7 @@ from mcp_portal.security import (
     invocation_scope,
     new_invocation,
 )
-from mcp_portal.tasks import MemoryTaskStore
+from mcp_portal.tasks import TaskStore
 from mcp_portal.telemetry import CostSink, TelemetryRecorder
 
 Transport = Literal["stdio", "http", "sse", "streamable-http"]
@@ -87,7 +87,7 @@ class PortalDependencies:
     audit_sink: AuditSink | None = None
     quota_backend: QuotaBackend | None = None
     approval_verifier: ApprovalVerifier | None = None
-    task_store: MemoryTaskStore | None = None
+    task_store: TaskStore | None = None
     telemetry: TelemetryRecorder | None = None
     cost_sink: CostSink | None = None
 

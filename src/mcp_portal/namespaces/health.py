@@ -98,6 +98,7 @@ def health_status(context: NamespaceContext) -> NamespaceStatus:
         version="1.0.0",
         maturity="stable",
         data_classification="internal",
+        timeout_seconds=10.0,
     )
 )
 def create_provider(context: NamespaceContext) -> NamespaceProvider:

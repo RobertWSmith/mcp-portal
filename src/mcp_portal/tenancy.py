@@ -9,7 +9,7 @@ from typing import Any
 
 from mcp_portal.errors import PermissionPortalError, ValidationPortalError
 from mcp_portal.security import InvocationContext
-from mcp_portal.tasks import MemoryTaskStore, PortalTask, TaskStatus
+from mcp_portal.tasks import PortalTask, TaskStatus, TaskStore
 
 TENANT_FIELD = "_portal_tenant"
 
@@ -136,7 +136,7 @@ class TenantScope:
 class TenantTaskService:
     """Task façade that never accepts caller-supplied owner or tenant identifiers."""
 
-    def __init__(self, store: MemoryTaskStore, scope: TenantScope) -> None:
+    def __init__(self, store: TaskStore, scope: TenantScope) -> None:
         """Bind a task store to one trusted tenant scope.
 
         Args:
