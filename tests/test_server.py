@@ -1,3 +1,5 @@
+"""Test server composition and the built-in health namespace surface."""
+
 from __future__ import annotations
 
 import json

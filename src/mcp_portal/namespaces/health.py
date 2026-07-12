@@ -1,3 +1,5 @@
+"""Provide health and runtime-configuration MCP components."""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,5 @@
+"""Remove configured secrets and sensitive fields from portal data."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

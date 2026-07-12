@@ -1,9 +1,24 @@
+"""Enforce high-level module and Google-style callable documentation."""
+
 from __future__ import annotations
 
 import ast
 from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src" / "mcp_portal"
+
+
+def test_python_modules_have_docstrings() -> None:
+    """Verify source and test modules describe their high-level purpose."""
+    project_root = SOURCE_ROOT.parents[1]
+    paths = [*SOURCE_ROOT.rglob("*.py"), *(project_root / "tests").rglob("*.py")]
+    missing = [
+        path.relative_to(project_root)
+        for path in paths
+        if not ast.get_docstring(ast.parse(path.read_text(encoding="utf-8")))
+    ]
+
+    assert missing == []
 
 
 def test_source_callables_have_google_style_docstrings() -> None:

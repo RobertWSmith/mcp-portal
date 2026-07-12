@@ -1,3 +1,5 @@
+"""Discover, register, and build isolated MCP namespace providers."""
+
 from __future__ import annotations
 
 import importlib

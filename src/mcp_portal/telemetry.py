@@ -1,3 +1,5 @@
+"""Record tenant-bound usage, cost, and OpenTelemetry measurements."""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,5 @@
+"""Configure token and enterprise authentication and authorization."""
+
 from __future__ import annotations
 
 import base64

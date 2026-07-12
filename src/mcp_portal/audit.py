@@ -1,3 +1,5 @@
+"""Create sanitized audit events and deliver them to configurable sinks."""
+
 from __future__ import annotations
 
 import hashlib

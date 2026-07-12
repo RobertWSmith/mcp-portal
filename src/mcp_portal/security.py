@@ -1,3 +1,5 @@
+"""Model authenticated identities and invocation-scoped security context."""
+
 from __future__ import annotations
 
 import contextvars

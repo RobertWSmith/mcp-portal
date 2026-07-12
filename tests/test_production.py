@@ -1,3 +1,5 @@
+"""Test production authentication, integrations, lifecycle, and ASGI setup."""
+
 from __future__ import annotations
 
 import base64

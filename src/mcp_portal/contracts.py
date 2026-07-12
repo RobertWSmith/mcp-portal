@@ -1,3 +1,5 @@
+"""Generate, fingerprint, and compare public MCP tool contracts."""
+
 from __future__ import annotations
 
 import hashlib

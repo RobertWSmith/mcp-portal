@@ -1,3 +1,5 @@
+"""Store and manage tenant-owned asynchronous portal tasks in memory."""
+
 from __future__ import annotations
 
 import secrets

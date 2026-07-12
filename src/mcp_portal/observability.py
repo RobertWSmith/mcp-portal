@@ -1,3 +1,5 @@
+"""Configure telemetry environment variables and metric recorders."""
+
 from __future__ import annotations
 
 import os

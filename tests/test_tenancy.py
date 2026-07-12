@@ -1,3 +1,5 @@
+"""Test tenant isolation across storage, clients, policy, and configuration."""
+
 from __future__ import annotations
 
 from dataclasses import replace

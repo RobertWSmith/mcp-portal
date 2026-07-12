@@ -1,3 +1,5 @@
+"""Define sanitized portal error types for public failure responses."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

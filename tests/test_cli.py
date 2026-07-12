@@ -1,3 +1,5 @@
+"""Test command-line entry points, transports, and direct script execution."""
+
 from __future__ import annotations
 
 import os

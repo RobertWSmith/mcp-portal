@@ -1,3 +1,5 @@
+"""Compose, govern, configure, and run the MCP Portal server."""
+
 from __future__ import annotations
 
 import argparse
