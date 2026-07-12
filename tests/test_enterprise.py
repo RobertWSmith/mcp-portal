@@ -4,14 +4,14 @@ from dataclasses import replace
 
 import anyio
 import pytest
+from httpx import ASGITransport, AsyncClient
 from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from starlette.testclient import TestClient
 
-from mcp_portal.audit import MemoryAuditSink, audit_event, digest_arguments
+from mcp_portal.audit import AuditDetails, MemoryAuditSink, audit_event, digest_arguments
 from mcp_portal.approvals import RejectingApprovalVerifier
 from mcp_portal.config import (
     AuthSettings,
@@ -47,7 +47,12 @@ from mcp_portal.security import (
     reset_invocation,
     set_invocation,
 )
-from mcp_portal.server import add_operational_routes, create_mcp, create_production_mcp
+from mcp_portal.server import (
+    PortalDependencies,
+    add_operational_routes,
+    create_mcp,
+    create_production_mcp,
+)
 from mcp_portal.tasks import MemoryTaskStore
 from mcp_portal.testing import create_test_settings
 
@@ -116,7 +121,10 @@ async def test_scope_policy_requires_verified_scopes() -> None:
 @pytest.mark.asyncio
 async def test_active_server_path_emits_sanitized_audit_events() -> None:
     audit = MemoryAuditSink()
-    server = create_mcp(create_test_settings(), include_debug_ui=False, audit_sink=audit)
+    server = create_mcp(
+        create_test_settings(),
+        dependencies=PortalDependencies(audit_sink=audit),
+    )
 
     result = await server.call_tool("health_ping", {})
 
@@ -130,7 +138,8 @@ async def test_active_server_path_emits_sanitized_audit_events() -> None:
 async def test_active_server_path_denies_before_tool_execution() -> None:
     audit = MemoryAuditSink()
     server = create_mcp(
-        create_test_settings(), include_debug_ui=False, policy_engine=DenyPolicy(), audit_sink=audit
+        create_test_settings(),
+        dependencies=PortalDependencies(policy_engine=DenyPolicy(), audit_sink=audit),
     )
 
     with pytest.raises(PermissionPortalError):
@@ -191,7 +200,6 @@ async def test_catalog_only_discloses_authorized_namespaces_and_components() -> 
                 required_scopes=frozenset({"hr.read"}),
             ),
         ],
-        include_debug_ui=False,
     )
     access_token = AccessToken(
         token="verified-token",
@@ -234,13 +242,12 @@ async def test_catalog_fails_closed_without_identity_or_with_custom_denial() -> 
         create_test_settings(),
         auth=AuthSettings(provider="static", static_token="configured-token"),
     )
-    authenticated = create_mcp(authenticated_settings, include_debug_ui=False)
+    authenticated = create_mcp(authenticated_settings)
     assert await authenticated.list_tools() == []
 
     denied = create_mcp(
         create_test_settings(),
-        include_debug_ui=False,
-        policy_engine=DenyPolicy(),
+        dependencies=PortalDependencies(policy_engine=DenyPolicy()),
     )
     assert await denied.list_tools() == []
 
@@ -261,8 +268,7 @@ async def test_destructive_operations_fail_closed_without_approval() -> None:
     server = create_mcp(
         create_test_settings(),
         namespaces=[Namespace("danger", destructive_provider)],
-        include_debug_ui=False,
-        approval_verifier=RejectingApprovalVerifier(),
+        dependencies=PortalDependencies(approval_verifier=RejectingApprovalVerifier()),
     )
     with pytest.raises(PermissionPortalError, match="approved"):
         await server.call_tool("danger_erase", {})
@@ -291,7 +297,6 @@ async def test_deadline_and_response_size_are_enforced() -> None:
     server = create_mcp(
         settings,
         namespaces=[namespace],
-        include_debug_ui=False,
         include_production_middleware=True,
     )
     with pytest.raises(TimeoutPortalError):
@@ -299,7 +304,6 @@ async def test_deadline_and_response_size_are_enforced() -> None:
 
     normal = create_mcp(
         replace(settings, enterprise=EnterpriseSettings(tool_timeout_seconds=1)),
-        include_debug_ui=False,
         include_production_middleware=True,
     )
     with pytest.raises(UpstreamPortalError):
@@ -340,7 +344,6 @@ async def test_per_tool_deadline_and_concurrency_overrides_are_enforced() -> Non
     server = create_mcp(
         replace(create_test_settings(), enterprise=enterprise),
         namespaces=[Namespace("controlled", controlled_provider)],
-        include_debug_ui=False,
     )
     results: list[object] = []
 
@@ -410,7 +413,8 @@ async def test_downstream_timeout_and_readiness_expose_open_circuit() -> None:
     }
 
 
-def test_readiness_fails_when_a_registered_dependency_is_unavailable() -> None:
+@pytest.mark.asyncio
+async def test_readiness_fails_when_a_registered_dependency_is_unavailable() -> None:
     """Verify readiness rejects traffic while liveness remains healthy."""
     clients = ClientFactories().with_factory(
         "records",
@@ -422,12 +426,18 @@ def test_readiness_fails_when_a_registered_dependency_is_unavailable() -> None:
         enterprise=EnterpriseSettings(circuit_breaker_failure_threshold=1),
         http=HttpSettings(),
     )
-    server = create_mcp(settings, include_debug_ui=False, clients=clients)
+    server = create_mcp(
+        settings,
+        dependencies=PortalDependencies(clients=clients),
+    )
     add_operational_routes(server, settings)
 
-    with TestClient(server.streamable_http_app()) as client:
-        live = client.get("/healthz")
-        ready = client.get("/readyz")
+    async with AsyncClient(
+        transport=ASGITransport(app=server.streamable_http_app()),
+        base_url="http://test",
+    ) as client:
+        live = await client.get("/healthz")
+        ready = await client.get("/readyz")
 
     assert live.status_code == 200
     assert live.json()["status"] == "alive"
@@ -504,7 +514,7 @@ def test_production_validation_rejects_unsafe_oauth_posture() -> None:
 
 
 def test_governed_provider_mounts_tools_resources_and_prompts() -> None:
-    server = create_mcp(create_test_settings(), include_debug_ui=False)
+    server = create_mcp(create_test_settings())
     tool = next(tool for tool in server._tool_manager.list_tools() if tool.name == "health_ping")
 
     assert tool.annotations is not None
@@ -527,7 +537,7 @@ def test_governed_tool_merges_explicit_and_inferred_semantics() -> None:
         """Return a placeholder update result."""
         return {"updated": True}
 
-    server = create_mcp(create_test_settings(), namespaces=(), include_debug_ui=False)
+    server = create_mcp(create_test_settings(), namespaces=())
     server.mount(provider, namespace="example")
     tool = server._tool_manager.get_tool("example_update_record")
 
@@ -545,15 +555,19 @@ def test_namespace_allowlist_controls_provider_admission() -> None:
         create_test_settings(),
         enterprise=EnterpriseSettings(namespace_allowlist=("missing",)),
     )
-    server = create_mcp(settings, include_debug_ui=False)
+    server = create_mcp(settings)
     assert server._tool_manager.list_tools() == []
 
 
-def test_readiness_route_reports_namespace_state() -> None:
+@pytest.mark.asyncio
+async def test_readiness_route_reports_namespace_state() -> None:
     settings = replace(create_test_settings(), http=HttpSettings())
     app = create_production_mcp(settings).streamable_http_app()
-    with TestClient(app) as client:
-        response = client.get("/readyz")
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/readyz")
     assert response.status_code == 200
     assert response.json()["namespaces"]["health"] == "ok"
 
@@ -572,5 +586,10 @@ def test_contract_manifest_comparison_classifies_changes() -> None:
 
 def test_audit_event_omits_raw_arguments() -> None:
     invocation = InvocationContext("r", "tool", InvocationIdentity(subject="s"), 1)
-    event = audit_event("completion", invocation, {"password": "secret"}, outcome="failed")
+    event = audit_event(
+        "completion",
+        invocation,
+        {"password": "secret"},
+        AuditDetails(outcome="failed"),
+    )
     assert "secret" not in str(event)

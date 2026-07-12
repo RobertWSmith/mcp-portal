@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from fastmcp import Client
 
-from mcp_portal.clients import ClientFactories, default_client_factories
+from mcp_portal.clients import default_client_factories
 from mcp_portal.config import (
     AzureIdentitySettings,
     AzureOpenAISettings,
@@ -13,37 +15,20 @@ from mcp_portal.config import (
     Settings,
 )
 from mcp_portal.namespaces import (
-    Clock,
     Namespace,
     NamespaceContext,
+    NamespaceDependencies,
     NamespaceProvider,
     build_namespace_context,
 )
 from mcp_portal.redaction import Redactor
-from mcp_portal.telemetry import TelemetryRecorder
 
 
-def create_test_settings(
-    *,
-    model_provider: ModelProviderName = "openai",
-    openai_api_key: str | None = "test-key",
-    large_model: str = "large-model",
-    small_model: str = "small-model",
-    embedding_model: str = "embedding-model",
-    azure_openai_endpoint: str | None = None,
-    azure_openai_api_version: str | None = None,
-    azure_openai_token_scope: str | None = None,
-    azure_large_model_deployment: str | None = None,
-    azure_small_model_deployment: str | None = None,
-    azure_embedding_model_deployment: str | None = None,
-    azure_tenant_id: str | None = None,
-    azure_client_id: str | None = None,
-    azure_client_secret: str | None = None,
-    health_enabled: bool = True,
-) -> Settings:
-    """Create deterministic settings for namespace tests.
+@dataclass(frozen=True)
+class SettingsOverrides:
+    """Overrides for deterministic test settings.
 
-    Args:
+    Attributes:
         model_provider: Active test model provider.
         openai_api_key: Optional test OpenAI API key.
         large_model: Test large language model name.
@@ -55,36 +40,61 @@ def create_test_settings(
         azure_large_model_deployment: Optional Azure large model deployment.
         azure_small_model_deployment: Optional Azure small model deployment.
         azure_embedding_model_deployment: Optional Azure embedding deployment.
-        azure_tenant_id: Optional Azure tenant id for service-principal auth.
-        azure_client_id: Optional Azure client id for service-principal auth.
-        azure_client_secret: Optional Azure client secret for service-principal auth.
-        health_enabled: Whether the health namespace should mount in tests.
+        azure_tenant_id: Optional Azure tenant id.
+        azure_client_id: Optional Azure client id.
+        azure_client_secret: Optional Azure client secret.
+        health_enabled: Whether the health namespace mounts.
+    """
+
+    model_provider: ModelProviderName = "openai"
+    openai_api_key: str | None = "test-key"
+    large_model: str = "large-model"
+    small_model: str = "small-model"
+    embedding_model: str = "embedding-model"
+    azure_openai_endpoint: str | None = None
+    azure_openai_api_version: str | None = None
+    azure_openai_token_scope: str | None = None
+    azure_large_model_deployment: str | None = None
+    azure_small_model_deployment: str | None = None
+    azure_embedding_model_deployment: str | None = None
+    azure_tenant_id: str | None = None
+    azure_client_id: str | None = None
+    azure_client_secret: str | None = None
+    health_enabled: bool = True
+
+
+def create_test_settings(overrides: SettingsOverrides | None = None) -> Settings:
+    """Create deterministic settings for namespace tests.
+
+    Args:
+        overrides: Optional deterministic setting overrides.
 
     Returns:
         Settings populated with deterministic test values.
     """
+    overrides = overrides or SettingsOverrides()
     return Settings(
         openai=OpenAISettings(
-            api_key=openai_api_key,
-            large_language_model=large_model,
-            small_language_model=small_model,
-            embedding_model=embedding_model,
+            api_key=overrides.openai_api_key,
+            large_language_model=overrides.large_model,
+            small_language_model=overrides.small_model,
+            embedding_model=overrides.embedding_model,
         ),
-        model_provider=model_provider,
+        model_provider=overrides.model_provider,
         azure_openai=AzureOpenAISettings(
-            endpoint=azure_openai_endpoint,
-            api_version=azure_openai_api_version,
-            token_scope=azure_openai_token_scope or DEFAULT_AZURE_OPENAI_TOKEN_SCOPE,
-            large_language_model_deployment=azure_large_model_deployment,
-            small_language_model_deployment=azure_small_model_deployment,
-            embedding_model_deployment=azure_embedding_model_deployment,
+            endpoint=overrides.azure_openai_endpoint,
+            api_version=overrides.azure_openai_api_version,
+            token_scope=overrides.azure_openai_token_scope or DEFAULT_AZURE_OPENAI_TOKEN_SCOPE,
+            large_language_model_deployment=overrides.azure_large_model_deployment,
+            small_language_model_deployment=overrides.azure_small_model_deployment,
+            embedding_model_deployment=overrides.azure_embedding_model_deployment,
         ),
         azure_identity=AzureIdentitySettings(
-            tenant_id=azure_tenant_id,
-            client_id=azure_client_id,
-            client_secret=azure_client_secret,
+            tenant_id=overrides.azure_tenant_id,
+            client_id=overrides.azure_client_id,
+            client_secret=overrides.azure_client_secret,
         ),
-        health=HealthSettings(enabled=health_enabled),
+        health=HealthSettings(enabled=overrides.health_enabled),
     )
 
 
@@ -92,48 +102,47 @@ def create_namespace_test_context(
     namespace_name: str = "test",
     *,
     settings: Settings | None = None,
-    clients: ClientFactories | None = None,
-    redactor: Redactor | None = None,
-    clock: Clock | None = None,
-    telemetry: TelemetryRecorder | None = None,
+    dependencies: NamespaceDependencies | None = None,
 ) -> NamespaceContext:
     """Create a namespace context for direct unit tests.
 
     Args:
         namespace_name: Namespace prefix to use in the test context.
         settings: Optional deterministic settings.
-        clients: Optional external client factory registry.
-        redactor: Optional diagnostic redactor.
-        clock: Optional test clock.
-        telemetry: Optional metrics and cost-accounting recorder.
+        dependencies: Optional namespace service overrides.
 
     Returns:
         A namespace context built through the production helper.
     """
     selected_settings = settings or create_test_settings()
-    namespace = Namespace(
-        name=namespace_name,
-        create=_empty_namespace_provider,
-        description="Test namespace.",
-        tags=frozenset({"test"}),
-    )
+    dependencies = dependencies or NamespaceDependencies()
     return build_namespace_context(
-        namespace,
-        selected_settings,
-        clients=clients or default_client_factories(),
-        redactor=redactor
-        or Redactor.from_secrets(
-            (
-                selected_settings.openai.api_key,
-                selected_settings.azure_identity.client_secret,
-                selected_settings.auth.static_token,
-                selected_settings.auth.jwt_public_key,
-                selected_settings.auth.ldap_bind_password,
-                selected_settings.mongodb.connection_string,
-            )
+        Namespace(
+            name=namespace_name,
+            create=lambda context: NamespaceProvider(f"Test {context.name}"),
+            description="Test namespace.",
+            tags=frozenset({"test"}),
         ),
-        clock=clock,
-        telemetry=telemetry,
+        selected_settings,
+        NamespaceDependencies(
+            clients=dependencies.clients or default_client_factories(),
+            redactor=dependencies.redactor
+            or Redactor.from_secrets(
+                (
+                    selected_settings.openai.api_key,
+                    selected_settings.azure_identity.client_secret,
+                    selected_settings.auth.static_token,
+                    selected_settings.auth.jwt_public_key,
+                    selected_settings.auth.ldap_bind_password,
+                    selected_settings.mongodb.connection_string,
+                )
+            ),
+            clock=dependencies.clock,
+            egress=dependencies.egress,
+            credentials=dependencies.credentials,
+            tasks=dependencies.tasks,
+            telemetry=dependencies.telemetry,
+        ),
     )
 
 
@@ -141,15 +150,12 @@ def create_namespace_test_client(
     namespace: Namespace,
     *,
     settings: Settings | None = None,
-    include_debug_ui: bool = False,
 ) -> Client:
     """Create an in-memory FastMCP client for one namespace.
 
     Args:
         namespace: Namespace manifest to mount.
         settings: Optional deterministic settings.
-        include_debug_ui: Whether to include the central debug app.
-
     Returns:
         A FastMCP client ready for use as an async context manager.
     """
@@ -159,18 +165,5 @@ def create_namespace_test_client(
         create_mcp(
             settings or create_test_settings(),
             namespaces=(namespace,),
-            include_debug_ui=include_debug_ui,
         )
     )
-
-
-def _empty_namespace_provider(context: NamespaceContext) -> NamespaceProvider:
-    """Create an empty provider for test context construction.
-
-    Args:
-        context: Runtime services shared with the test namespace.
-
-    Returns:
-        An empty provider named for the test namespace.
-    """
-    return NamespaceProvider(f"Test {context.name}")

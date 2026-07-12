@@ -4,6 +4,9 @@ MCP Portal reads runtime configuration through `Settings.from_env()` in
 `src/mcp_portal/config.py`. Copy `.env.example` to `.env` for local development, then
 override values in your shell, deployment platform, or an explicit dotenv file.
 
+`EnvironmentVariable` in `src/mcp_portal/config.py` is the code-owned name contract.
+Tests require this reference and `.env.example` to declare exactly the same names.
+
 ## Loading Rules
 
 - If `--env-file` is provided to `mcp-portal`, that file is loaded and its values
@@ -215,13 +218,8 @@ MCP_PORTAL_DATABASE_PROVIDER=sqlalchemy
 MCP_PORTAL_DATABASE_SQLALCHEMY_URL=sqlite:///portal.db
 ```
 
-Install the matching optional dependency before using a database backend:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[database]"
-```
-
-Use `".[oracle]"` instead when connecting to Oracle.
+SQLAlchemy is included in the base installation. Install the `".[oracle]"` extra when
+connecting to Oracle.
 
 ## LangChain MongoDB Settings
 
@@ -233,9 +231,9 @@ environment variables.
 
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
-| `MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING` | unset | Required to register the `langchain_mongodb` client factory | MongoDB connection URI. This value is omitted from public settings snapshots and redacted from diagnostics. |
-| `MCP_PORTAL_LANGCHAIN_MONGODB_DATABASE` | unset | Required for vector search, loader, docstore, and agent database helpers unless a namespace passes an override | Default MongoDB database name. |
-| `MCP_PORTAL_LANGCHAIN_MONGODB_VECTOR_SEARCH_INDEX` | `vector_index` | No | Default Atlas Vector Search index name used by vector search and semantic cache helpers. |
+| `MCP_PORTAL_MONGODB_CONNECTION_STRING` | unset | Required to register the `langchain_mongodb` client factory | MongoDB connection URI. This value is omitted from public settings snapshots and redacted from diagnostics. |
+| `MCP_PORTAL_MONGODB_DATABASE` | unset | Required for vector search, loader, docstore, and agent database helpers unless a namespace passes an override | Default MongoDB database name. |
+| `MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX` | `vector_index` | No | Default Atlas Vector Search index name used by vector search and semantic cache helpers. |
 
 Hard-coded collection aliases:
 
@@ -250,9 +248,9 @@ Example:
 
 ```dotenv
 MCP_PORTAL_DATABASE_PROVIDER=none
-MCP_PORTAL_LANGCHAIN_MONGODB_CONNECTION_STRING=mongodb+srv://user:password@cluster.example/
-MCP_PORTAL_LANGCHAIN_MONGODB_DATABASE=portal
-MCP_PORTAL_LANGCHAIN_MONGODB_VECTOR_SEARCH_INDEX=portal_vector
+MCP_PORTAL_MONGODB_CONNECTION_STRING=mongodb+srv://user:password@cluster.example/
+MCP_PORTAL_MONGODB_DATABASE=portal
+MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX=portal_vector
 ```
 
 Install the optional connector dependency before using these helpers:
@@ -336,14 +334,18 @@ Namespaces report metered consumption after receiving authoritative provider usa
 not hard-coded into the portal because provider and contract rates change independently of code:
 
 ```python
+from mcp_portal.telemetry import UsageMeasurement
+
 await context.record_usage(
-    provider="azure.ai.openai",
-    service="language-model",
-    operation="chat",
-    sku="gpt-enterprise",
-    quantity=response.usage.input_tokens,
-    unit="input_token",
-    estimated_cost="0.0125",
+    UsageMeasurement(
+        provider="azure.ai.openai",
+        service="language-model",
+        operation="chat",
+        sku="gpt-enterprise",
+        quantity=response.usage.input_tokens,
+        unit="input_token",
+        estimated_cost="0.0125",
+    )
 )
 ```
 

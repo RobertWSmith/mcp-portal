@@ -8,18 +8,19 @@ import mcp_portal.telemetry as telemetry_module
 from mcp_portal.clients import ClientFactories
 from mcp_portal.config import ObservabilitySettings
 from mcp_portal.errors import PermissionPortalError
-from mcp_portal.namespaces import NamespaceContext
+from mcp_portal.namespaces import NamespaceContext, NamespaceDependencies
 from mcp_portal.policy import PolicyDecision
 from mcp_portal.security import (
     InvocationContext,
     InvocationIdentity,
     invocation_scope,
 )
-from mcp_portal.server import create_mcp
+from mcp_portal.server import PortalDependencies, create_mcp
 from mcp_portal.telemetry import (
     MemoryCostSink,
     MemoryTelemetryRecorder,
     OpenTelemetryRecorder,
+    UsageMeasurement,
     UsageRecord,
 )
 from mcp_portal.testing import create_namespace_test_context, create_test_settings
@@ -126,16 +127,18 @@ def test_usage_record_is_exact_tenant_bound_and_validated() -> None:
     """Verify accounting records retain exact decimals and trusted ownership."""
     record = UsageRecord.create(
         invocation(),
-        "billing",
-        provider="azure.ai.openai",
-        service="language-model",
-        operation="chat",
-        sku="gpt-enterprise",
-        quantity="1250",
-        unit="input_token",
-        estimated_cost="0.012500",
-        currency="usd",
-        pricing_version="contract-2026-07",
+        UsageMeasurement(
+            namespace="billing",
+            provider="azure.ai.openai",
+            service="language-model",
+            operation="chat",
+            sku="gpt-enterprise",
+            quantity="1250",
+            unit="input_token",
+            estimated_cost="0.012500",
+            currency="usd",
+            pricing_version="contract-2026-07",
+        ),
     )
 
     assert record.tenant_id == "tenant-a"
@@ -146,12 +149,14 @@ def test_usage_record_is_exact_tenant_bound_and_validated() -> None:
     with pytest.raises(ValueError, match="negative"):
         UsageRecord.create(
             invocation(),
-            "billing",
-            provider="provider",
-            service="service",
-            operation="chat",
-            quantity=-1,
-            unit="request",
+            UsageMeasurement(
+                namespace="billing",
+                provider="provider",
+                service="service",
+                operation="chat",
+                quantity=-1,
+                unit="request",
+            ),
         )
 
 
@@ -164,13 +169,15 @@ async def test_open_telemetry_metrics_and_cost_sink_are_both_recorded(monkeypatc
     recorder = OpenTelemetryRecorder(cost_sink=sink, include_tenant_metrics=False)
     record = UsageRecord.create(
         invocation(),
-        "billing",
-        provider="openai",
-        service="language-model",
-        operation="chat",
-        quantity=50,
-        unit="output_token",
-        estimated_cost="0.002",
+        UsageMeasurement(
+            namespace="billing",
+            provider="openai",
+            service="language-model",
+            operation="chat",
+            quantity=50,
+            unit="output_token",
+            estimated_cost="0.002",
+        ),
     )
 
     recorder.record_tool_call(
@@ -199,16 +206,21 @@ async def test_namespace_context_records_usage_with_configured_defaults() -> Non
             cost_currency="EUR", pricing_version="enterprise-contract-v3"
         ),
     )
-    context: NamespaceContext = create_namespace_test_context(settings=settings, telemetry=recorder)
+    context: NamespaceContext = create_namespace_test_context(
+        settings=settings,
+        dependencies=NamespaceDependencies(telemetry=recorder),
+    )
 
     with invocation_scope(invocation()):
         record = await context.record_usage(
-            provider="internal",
-            service="document-processing",
-            operation="extract",
-            quantity=4,
-            unit="document",
-            estimated_cost="0.08",
+            UsageMeasurement(
+                provider="internal",
+                service="document-processing",
+                operation="extract",
+                quantity=4,
+                unit="document",
+                estimated_cost="0.08",
+            )
         )
 
     assert recorder.usage_records == [record]
@@ -221,16 +233,20 @@ async def test_namespace_context_records_usage_with_configured_defaults() -> Non
 async def test_tool_and_downstream_outcomes_reach_injected_recorder() -> None:
     """Verify active server and client execution paths emit outcome metrics."""
     recorder = MemoryTelemetryRecorder()
-    server = create_mcp(create_test_settings(), include_debug_ui=False, telemetry=recorder)
+    server = create_mcp(
+        create_test_settings(),
+        dependencies=PortalDependencies(telemetry=recorder),
+    )
 
     assert await server.call_tool("health_ping", {})
     assert recorder.tool_calls[-1]["outcome"] == "succeeded"
 
     denied = create_mcp(
         create_test_settings(),
-        include_debug_ui=False,
-        telemetry=recorder,
-        policy_engine=DenyTelemetryPolicy(),
+        dependencies=PortalDependencies(
+            telemetry=recorder,
+            policy_engine=DenyTelemetryPolicy(),
+        ),
     )
     with pytest.raises(PermissionPortalError):
         await denied.call_tool("health_ping", {})

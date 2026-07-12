@@ -36,12 +36,13 @@ class Redactor:
         Returns:
             A redactor with empty and placeholder values removed.
         """
-        visible_secrets = tuple(
-            secret
-            for secret in secrets
-            if secret is not None and secret.strip() and secret != "your-api-key"
+        return cls(
+            secrets=tuple(
+                secret
+                for secret in secrets
+                if secret is not None and secret.strip() and secret != "your-api-key"
+            )
         )
-        return cls(secrets=visible_secrets)
 
     def redact(self, value: Any) -> Any:
         """Return a copy of `value` with sensitive data removed.

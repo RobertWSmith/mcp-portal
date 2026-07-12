@@ -6,7 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from starlette.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 import mcp_portal.clients as clients_module
 import mcp_portal.auth as auth_module
@@ -667,7 +667,7 @@ def test_langchain_mongodb_connector_reports_missing_required_settings() -> None
 
 async def test_tool_contract_manifest_fingerprints_health_tools() -> None:
     """Verify tool contract fingerprints are generated for mounted namespace tools."""
-    server = create_mcp(create_test_settings(), include_debug_ui=False)
+    server = create_mcp(create_test_settings())
 
     manifest = await generate_tool_contract_manifest(server)
 
@@ -675,15 +675,19 @@ async def test_tool_contract_manifest_fingerprints_health_tools() -> None:
     assert all(len(fingerprint) == 64 for fingerprint in manifest.values())
 
 
-def test_production_asgi_app_exposes_health_route() -> None:
+@pytest.mark.asyncio
+async def test_production_asgi_app_exposes_health_route() -> None:
     """Verify the production ASGI entrypoint exposes an operational health route."""
     settings = replace(
         create_test_settings(),
         http=HttpSettings(path="/mcp", health_path="/healthz"),
     )
 
-    with TestClient(create_app(settings)) as client:
-        response = client.get("/healthz")
+    async with AsyncClient(
+        transport=ASGITransport(app=create_app(settings)),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/healthz")
 
     assert response.status_code == 200
     assert response.json() == {"status": "alive", "service": "mcp-portal"}

@@ -78,10 +78,8 @@ def test_server_main_passes_custom_transport_options(monkeypatch) -> None:
     }
 
 
-def test_server_main_rebuilds_server_for_env_file_and_debug_option(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """Verify options that affect server construction create a tailored server."""
+def test_server_main_rebuilds_server_for_env_file(monkeypatch, tmp_path: Path) -> None:
+    """Verify an environment file creates a server with tailored settings."""
     fake_mcp = FakeMcp()
     env_file = tmp_path / ".env"
     env_file.write_text("OPENAI_LARGE_LANGUAGE_MODEL=cli-large\n", encoding="utf-8")
@@ -109,22 +107,19 @@ def test_server_main_rebuilds_server_for_env_file_and_debug_option(
     def fake_create_mcp(
         settings=None,
         namespaces=None,
-        include_debug_ui=True,
     ):
         """Record server construction options and return a fake server."""
         captured["settings"] = settings
         captured["namespaces"] = namespaces
-        captured["include_debug_ui"] = include_debug_ui
         return fake_mcp
 
     monkeypatch.setattr(server_module, "create_mcp", fake_create_mcp)
 
-    server_module.main(["--env-file", str(env_file), "--no-debug-ui"])
+    server_module.main(["--env-file", str(env_file)])
 
     assert fake_mcp.ran is True
     assert captured["settings"].openai_large_language_model == "cli-large"
     assert captured["namespaces"] is None
-    assert captured["include_debug_ui"] is False
 
 
 def test_server_main_uses_production_profile(monkeypatch) -> None:
@@ -255,6 +250,7 @@ spec = importlib.util.spec_from_file_location(
 )
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 assert callable(module.create_mcp)
