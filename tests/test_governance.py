@@ -7,6 +7,7 @@ import json
 import pytest
 
 from mcp_portal import governance
+from mcp_portal.contracts import tool_contract_payload
 from mcp_portal.namespaces import (
     Namespace,
     NamespaceContext,
@@ -86,6 +87,28 @@ async def test_governance_writes_and_checks_contract_baseline(tmp_path) -> None:
     manifest["removed_tool"] = "0" * 64
     baseline.write_text(json.dumps(manifest), encoding="utf-8")
     assert await governance.check_repository(baseline) == ("tool contracts removed: removed_tool",)
+
+
+@pytest.mark.asyncio
+async def test_governed_tool_descriptions_are_normalized() -> None:
+    """Verify nested function indentation cannot change public contract fingerprints."""
+    server = governance.create_mcp(
+        governance.governance_settings(), namespaces=governance.iter_namespaces(strict=True)
+    )
+    descriptions = {
+        tool.name: tool_contract_payload(tool)["description"] for tool in await server.list_tools()
+    }
+
+    assert descriptions["health_ping"] == (
+        "Confirm that the MCP server can execute tools.\n\n"
+        "Returns:\n"
+        "    Structured liveness state and acknowledgement.\n"
+    )
+    assert descriptions["health_runtime_config"] == (
+        "Return non-secret runtime configuration for development.\n\n"
+        "Returns:\n"
+        "    Validated public runtime settings with secrets omitted.\n"
+    )
 
 
 @pytest.mark.asyncio
