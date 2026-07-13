@@ -115,11 +115,11 @@ Inject production or test adapters as one explicit dependency bundle instead of 
 the server factory signature:
 
 ```python
-from mcp_portal.server import PortalDependencies, create_mcp
+from mcp_portal.server import PortalServices, create_mcp
 
 server = create_mcp(
     settings,
-    dependencies=PortalDependencies(
+    services=PortalServices(
         clients=client_factories,
         policy_engine=policy_engine,
         audit_sink=audit_sink,
@@ -375,10 +375,18 @@ The portal prefixes tool and prompt names, so `hello` becomes `example_hello` an
 names are prefixed. Registrations are installed through public FastMCP APIs rather than
 copying private manager state. See `src/mcp_portal/namespaces/health.py` for the complete
 reference.
-Namespace modules are discovered automatically; adding the decorated module is enough.
+Register built-in namespace modules explicitly in `BUILTIN_NAMESPACE_MODULES`.
 Use MCP `ToolAnnotations` for client-visible behavior and Pydantic response models for
 stable `outputSchema` and `structuredContent`. Keep `_meta.tags` only as portal policy
 metadata; tags are not a substitute for standard MCP semantics.
+
+Built-in namespaces are explicitly admitted by the portal. Trusted namespace packages can
+publish a `mcp_portal.namespaces` Python entry point that loads a `Namespace` manifest or a
+zero-argument manifest factory. The portal does not scan arbitrary installed modules.
+
+Namespaces that need independent deployment or security isolation can return a
+`RemoteNamespaceProvider` from their manifest factory. The provider uses FastMCP's proxy
+boundary while the portal retains local catalog, authorization, admission, and audit policy.
 
 Each namespace receives a `NamespaceContext` with shared settings, a namespace-scoped
 logger, a redactor for safe diagnostics, a clock, and lazy external client factories.

@@ -1,6 +1,6 @@
 """Public server package for runtime, construction, and CLI APIs."""
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from mcp_portal.server.cli import build_arg_parser, main, mcp
 from mcp_portal.server.factory import (
@@ -10,11 +10,15 @@ from mcp_portal.server.factory import (
     create_production_mcp,
 )
 from mcp_portal.server.runtime import PortalDependencies, PortalFastMCP
+from mcp_portal.remote import RemoteNamespaceProvider
+from mcp_portal.services import PortalServices
 
 __all__ = [
     "FastMCP",
     "PortalDependencies",
     "PortalFastMCP",
+    "PortalServices",
+    "RemoteNamespaceProvider",
     "add_operational_routes",
     "build_arg_parser",
     "create_mcp",
@@ -23,4 +27,3 @@ __all__ = [
     "main",
     "mcp",
 ]
-

@@ -10,6 +10,7 @@ from mcp_portal.config import DatabaseSettings
 from mcp_portal.errors import ConfigurationPortalError
 from mcp_portal.testing import create_test_settings
 
+
 def test_oracle_backend_factory_is_registered_when_configured(monkeypatch) -> None:
     """Verify Oracle config creates a SQLAlchemy database engine factory."""
     settings = replace(

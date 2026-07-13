@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import logging
-import pkgutil
 import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -20,6 +20,10 @@ from mcp_portal.egress import EgressPolicy
 from mcp_portal.observability import create_telemetry_recorder
 from mcp_portal.redaction import Redactor
 from mcp_portal.security import InvocationContext, current_invocation
+from mcp_portal.services import (
+    NamespaceDependencies as NamespaceDependencies,
+    PortalServices,
+)
 from mcp_portal.tasks import MemoryTaskStore, TaskStore
 from mcp_portal.telemetry import TelemetryRecorder, UsageMeasurement, UsageRecord
 from mcp_portal.tenancy import (
@@ -34,6 +38,8 @@ NamespaceHealthCheck = Callable[["NamespaceContext"], "NamespaceStatus"]
 NamespaceState = Literal["ok", "warning", "error", "disabled"]
 _SEMANTIC_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].+)?$")
 _DATA_CLASSIFICATIONS = frozenset({"public", "internal", "confidential", "restricted"})
+BUILTIN_NAMESPACE_MODULES = ("mcp_portal.namespaces.health",)
+NAMESPACE_ENTRY_POINT_GROUP = "mcp_portal.namespaces"
 
 
 @dataclass(frozen=True)
@@ -595,29 +601,6 @@ class NamespaceMetadata:
 
 
 @dataclass(frozen=True)
-class NamespaceDependencies:
-    """Shared services used to build namespace runtime contexts.
-
-    Attributes:
-        clients: Shared external client registry.
-        redactor: Shared diagnostic redactor.
-        clock: Optional namespace clock.
-        egress: Shared outbound destination policy.
-        credentials: Shared downstream credential broker.
-        tasks: Shared authorization-bound task store.
-        telemetry: Shared telemetry recorder.
-    """
-
-    clients: ClientFactories | None = None
-    redactor: Redactor | None = None
-    clock: Clock | None = None
-    egress: EgressPolicy | None = None
-    credentials: CredentialBroker | None = None
-    tasks: TaskStore | None = None
-    telemetry: TelemetryRecorder | None = None
-
-
-@dataclass(frozen=True)
 class NamespaceRuntime:
     """Pair a namespace manifest with its runtime context.
 
@@ -689,7 +672,7 @@ def register_namespace(
 def build_namespace_runtimes(
     namespaces: Sequence[Namespace],
     settings: Settings,
-    dependencies: NamespaceDependencies | None = None,
+    dependencies: PortalServices | None = None,
 ) -> tuple[NamespaceRuntime, ...]:
     """Build runtime contexts for a group of namespaces.
 
@@ -701,7 +684,7 @@ def build_namespace_runtimes(
     Returns:
         Runtime objects ready for mounting and diagnostics.
     """
-    dependencies = dependencies or NamespaceDependencies()
+    dependencies = dependencies or PortalServices()
     shared_clients = dependencies.clients or default_client_factories(settings)
     shared_redactor = dependencies.redactor or Redactor.from_secrets(
         (
@@ -715,22 +698,23 @@ def build_namespace_runtimes(
             settings.mongodb.connection_string,
         )
     )
-    shared_egress = dependencies.egress or EgressPolicy(
+    shared_egress = dependencies.egress_policy or EgressPolicy(
         allowed_hosts=frozenset(host.lower() for host in settings.enterprise.egress_allowed_hosts)
     )
-    shared_credentials = dependencies.credentials or RejectingCredentialBroker()
-    shared_tasks = dependencies.tasks or MemoryTaskStore(
+    shared_credentials = dependencies.credential_broker or RejectingCredentialBroker()
+    shared_tasks = dependencies.task_store or MemoryTaskStore(
         max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
         max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
     )
     shared_telemetry = dependencies.telemetry or create_telemetry_recorder(settings)
-    runtime_dependencies = NamespaceDependencies(
+    runtime_dependencies = replace(
+        dependencies,
         clients=shared_clients,
         redactor=shared_redactor,
         clock=dependencies.clock,
-        egress=shared_egress,
-        credentials=shared_credentials,
-        tasks=shared_tasks,
+        egress_policy=shared_egress,
+        credential_broker=shared_credentials,
+        task_store=shared_tasks,
         telemetry=shared_telemetry,
     )
 
@@ -750,7 +734,7 @@ def build_namespace_runtimes(
 def build_namespace_context(
     namespace: Namespace,
     settings: Settings,
-    dependencies: NamespaceDependencies,
+    dependencies: PortalServices,
 ) -> NamespaceContext:
     """Build the runtime context for one namespace.
 
@@ -769,9 +753,9 @@ def build_namespace_context(
         redactor=dependencies.redactor or Redactor(),
         clients=dependencies.clients or default_client_factories(settings),
         clock=dependencies.clock or utc_now,
-        egress=dependencies.egress or EgressPolicy(),
-        credentials=dependencies.credentials or RejectingCredentialBroker(),
-        tasks=dependencies.tasks
+        egress=dependencies.egress_policy or EgressPolicy(),
+        credentials=dependencies.credential_broker or RejectingCredentialBroker(),
+        tasks=dependencies.task_store
         or MemoryTaskStore(
             max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
             max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
@@ -790,7 +774,7 @@ def utc_now() -> datetime:
 
 
 def _discover_namespace_modules(*, strict: bool = False) -> None:
-    """Import namespace modules so their registration decorators run.
+    """Load explicit built-ins and trusted namespace entry points.
 
     Args:
         strict: Whether import failures should be raised instead of recorded.
@@ -811,21 +795,49 @@ def _discover_namespace_modules(*, strict: bool = False) -> None:
             _DISCOVERY_ERRORS[module_name] = f"{type(error).__name__}: {error}"
             logger.warning("Skipping namespace module %s: %s", module_name, error)
 
+    _load_namespace_entry_points(strict=strict, logger=logger)
+
     _DISCOVERED = True
 
 
+def _load_namespace_entry_points(*, strict: bool, logger: logging.Logger) -> None:
+    """Load namespace manifests from the trusted Python entry-point group.
+
+    Args:
+        strict: Whether plugin failures should stop discovery.
+        logger: Logger receiving safe discovery diagnostics.
+    """
+    for entry_point in importlib.metadata.entry_points(group=NAMESPACE_ENTRY_POINT_GROUP):
+        key = f"entrypoint:{entry_point.name}"
+        try:
+            loaded = entry_point.load()
+            namespace = (
+                loaded() if callable(loaded) and not isinstance(loaded, Namespace) else loaded
+            )
+            if namespace is None:
+                continue
+            if not isinstance(namespace, Namespace):
+                raise TypeError(
+                    "namespace entry point must load a Namespace or zero-argument factory"
+                )
+            existing = _NAMESPACE_REGISTRY.get(namespace.name)
+            if existing is not None and existing != namespace:
+                raise ValueError(f"Namespace {namespace.name!r} is already registered")
+            _NAMESPACE_REGISTRY[namespace.name] = namespace
+        except Exception as error:
+            if strict:
+                raise
+            _DISCOVERY_ERRORS[key] = f"{type(error).__name__}: {error}"
+            logger.warning("Skipping namespace entry point %s: %s", entry_point.name, error)
+
+
 def _iter_namespace_module_names() -> list[str]:
-    """Return importable namespace module names in deterministic order.
+    """Return the explicit built-in namespace modules.
 
     Returns:
-        Child module names inside the namespace package.
+        Stable built-in module names.
     """
-    module_infos = pkgutil.iter_modules(__path__, prefix=f"{__name__}.")
-    return sorted(
-        module_info.name
-        for module_info in module_infos
-        if not module_info.name.rsplit(".", maxsplit=1)[-1].startswith("_")
-    )
+    return list(BUILTIN_NAMESPACE_MODULES)
 
 
 def iter_namespace_discovery_errors() -> dict[str, str]:

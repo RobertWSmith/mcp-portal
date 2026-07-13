@@ -8,6 +8,7 @@ from typing import Any
 from mcp_portal.config import MongoDBCollectionName, MongoDBSettings, Settings
 from mcp_portal.errors import ConfigurationPortalError
 
+
 @dataclass(frozen=True)
 class MongoDBConnectors:
     """Convenience factory for MongoDB integration objects.
@@ -369,6 +370,7 @@ class MongoDBConnectors:
                 cause=error,
             ) from error
 
+
 def _create_langchain_mongodb_connectors(settings: Settings) -> MongoDBConnectors:
     """Create LangChain MongoDB connector helpers from runtime settings.
 
@@ -398,6 +400,7 @@ def _create_langchain_mongodb_connectors(settings: Settings) -> MongoDBConnector
         ) from error
 
     return MongoDBConnectors(settings.mongodb)
+
 
 def _import_langchain_mongodb() -> Any:
     """Import the LangChain MongoDB integration package lazily.
@@ -441,4 +444,3 @@ def _import_langchain_mongodb_agent_database() -> Any:
     from langchain_mongodb.agent_toolkit.database import MongoDBDatabase
 
     return MongoDBDatabase
-

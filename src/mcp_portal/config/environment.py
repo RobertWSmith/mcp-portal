@@ -31,6 +31,7 @@ from mcp_portal.config.models import (
     OpenAISettings,
 )
 
+
 def _openai_settings_from_env() -> OpenAISettings:
     """Build direct OpenAI settings from the environment.
 
@@ -200,6 +201,7 @@ def _enterprise_settings_from_env() -> EnterpriseSettings:
         require_auth=_bool_env(
             EnvironmentVariable.MCP_PORTAL_PRODUCTION_REQUIRE_AUTH, default=False
         ),
+        multi_instance=_bool_env(EnvironmentVariable.MCP_PORTAL_MULTI_INSTANCE, default=False),
         require_tenant=_bool_env(EnvironmentVariable.MCP_PORTAL_REQUIRE_TENANT, default=False),
         tenant_claim=(_optional_env(EnvironmentVariable.MCP_PORTAL_TENANT_CLAIM) or "tenant_id"),
         audit_enabled=_bool_env(EnvironmentVariable.MCP_PORTAL_AUDIT_ENABLED, default=True),
@@ -557,4 +559,3 @@ def _tag_scope_env(
         rules[tag] = scopes
 
     return rules or dict(default)
-

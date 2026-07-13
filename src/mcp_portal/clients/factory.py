@@ -10,6 +10,7 @@ from mcp_portal.clients.mongodb import _create_langchain_mongodb_connectors
 from mcp_portal.clients.registry import ClientFactories
 from mcp_portal.telemetry import OpenTelemetryRecorder, TelemetryRecorder
 
+
 def default_client_factories(
     settings: Settings | None = None,
     *,
@@ -66,6 +67,7 @@ def default_client_factories(
 
     return factories
 
+
 def _create_sqlalchemy_engine(settings: Settings) -> Any:
     """Create a SQLAlchemy engine from runtime database settings.
 
@@ -115,6 +117,7 @@ def _import_sqlalchemy_create_engine() -> Any:
     from sqlalchemy import create_engine
 
     return create_engine
+
 
 def _sqlalchemy_engine_configuration(settings: Settings) -> tuple[str, dict[str, Any]]:
     """Build SQLAlchemy engine URL and keyword arguments.

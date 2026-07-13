@@ -392,6 +392,7 @@ class EnterpriseSettings:
 
     Attributes:
         require_auth: Whether hardened production startup requires authentication.
+        multi_instance: Whether deployment runs more than one portal process.
         tenant_claim: Verified token claim used for tenant partitioning.
         audit_enabled: Whether request lifecycle audit events are emitted.
         tool_timeout_seconds: Default maximum tool execution time.
@@ -407,6 +408,7 @@ class EnterpriseSettings:
     """
 
     require_auth: bool = False
+    multi_instance: bool = False
     require_tenant: bool = False
     tenant_claim: str = "tenant_id"
     audit_enabled: bool = True
@@ -430,6 +432,7 @@ class EnterpriseSettings:
         """
         return {
             "require_auth": self.require_auth,
+            "multi_instance": self.multi_instance,
             "require_tenant": self.require_tenant,
             "tenant_claim": self.tenant_claim,
             "audit_enabled": self.audit_enabled,

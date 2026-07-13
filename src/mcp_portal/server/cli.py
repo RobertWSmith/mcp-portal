@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP  # noqa: F401 - compatibility test seam
+from fastmcp import FastMCP  # noqa: F401 - compatibility test seam
 
 from mcp_portal.config import Settings
 from mcp_portal.server.factory import create_mcp, create_production_mcp
@@ -17,6 +17,7 @@ from mcp_portal.server.runtime import (  # noqa: F401 - compatibility test seam
 )
 
 mcp = create_mcp()
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for the console script.

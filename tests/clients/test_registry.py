@@ -2,6 +2,7 @@
 
 from mcp_portal.clients import ClientFactories
 
+
 async def test_lifecycle_managed_clients_are_reused_and_closed() -> None:
     """Verify shared client factories reuse and close clients."""
 
@@ -42,4 +43,3 @@ async def test_lifecycle_managed_clients_are_reused_and_closed() -> None:
     await engine_registry.aclose()
 
     assert engine.disposed is True
-

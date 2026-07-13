@@ -159,14 +159,14 @@ def test_sse_rejects_stateless_mode() -> None:
     assert exc_info.value.code == 2
 
 
-def test_portal_fastmcp_run_maps_legacy_transport_options(monkeypatch) -> None:
-    """Verify the SDK adapter maps legacy CLI run options onto SDK settings."""
+def test_portal_fastmcp_run_uses_fastmcp_transport_options(monkeypatch) -> None:
+    """Verify the portal delegates transport options to FastMCP 3 unchanged."""
     calls = []
     server = server_module.PortalFastMCP("Test")
 
-    def fake_run(self, transport="stdio", mount_path=None) -> None:
-        """Record the SDK transport that would have run."""
-        calls.append((self, transport, mount_path))
+    def fake_run(self, transport="stdio", show_banner=None, **kwargs) -> None:
+        """Record the FastMCP transport that would have run."""
+        calls.append((self, transport, show_banner, kwargs))
 
     monkeypatch.setattr(server_module.FastMCP, "run", fake_run)
 
@@ -182,37 +182,37 @@ def test_portal_fastmcp_run_maps_legacy_transport_options(monkeypatch) -> None:
     )
     server.run(transport="sse", path="/events")
 
-    assert [(transport, mount_path) for _, transport, mount_path in calls] == [
-        ("streamable-http", None),
-        ("sse", "/events"),
-    ]
-    assert server.settings.host == "127.0.0.1"
-    assert server.settings.port == 9001
-    assert server.settings.streamable_http_path == "/events"
-    assert server.settings.log_level == "DEBUG"
-    assert server.settings.json_response is True
-    assert server.settings.stateless_http is True
+    assert calls[0][1:] == (
+        "http",
+        False,
+        {
+            "host": "127.0.0.1",
+            "port": 9001,
+            "path": "/custom",
+            "log_level": "debug",
+            "json_response": True,
+            "stateless": True,
+        },
+    )
+    assert calls[1][1:] == ("sse", None, {"path": "/events"})
 
 
-def test_portal_fastmcp_http_app_applies_legacy_options(monkeypatch) -> None:
-    """Verify the ASGI compatibility wrapper applies HTTP options."""
+def test_portal_fastmcp_http_app_delegates_to_fastmcp(monkeypatch) -> None:
+    """Verify the ASGI wrapper delegates HTTP options to FastMCP 3."""
     server = server_module.PortalFastMCP("Test")
 
-    def fake_streamable_http_app(self):
+    def fake_http_app(self, *args, **kwargs):
         """Return a placeholder ASGI app."""
-        return {"app": self.settings.streamable_http_path}
+        return {"args": args, "kwargs": kwargs}
 
-    monkeypatch.setattr(
-        server_module.FastMCP,
-        "streamable_http_app",
-        fake_streamable_http_app,
-    )
+    monkeypatch.setattr(server_module.FastMCP, "http_app", fake_http_app)
 
     app = server.http_app(path="/mcp", json_response=True, stateless_http=True)
 
-    assert app == {"app": "/mcp"}
-    assert server.settings.json_response is True
-    assert server.settings.stateless_http is True
+    assert app == {
+        "args": (),
+        "kwargs": {"path": "/mcp", "json_response": True, "stateless_http": True},
+    }
 
 
 def test_module_entrypoint_invokes_main(monkeypatch) -> None:

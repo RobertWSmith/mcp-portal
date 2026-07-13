@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from mcp_portal.audit import AuditDetails, MemoryAuditSink, audit_event, digest_arguments
@@ -51,6 +51,8 @@ from mcp_portal.security import (
 )
 from mcp_portal.server import (
     PortalDependencies,
+    PortalServices,
+    RemoteNamespaceProvider,
     add_operational_routes,
     create_mcp,
     create_production_mcp,
@@ -99,7 +101,7 @@ async def test_scope_policy_requires_verified_scopes() -> None:
         """Mutate test state."""
         return "ok"
 
-    tool = child._tool_manager.get_tool("mutate")
+    tool = await child.get_tool("mutate")
     assert tool is not None
     engine = ScopePolicyEngine(settings)
     denied = await engine.authorize(
@@ -219,7 +221,7 @@ async def test_catalog_only_discloses_authorized_namespaces_and_components() -> 
         assert [tool.name for tool in tools] == ["finance_inspect_record"]
         assert tools[0].meta["required_scopes"] == ["finance.read"]
         assert [str(resource.uri) for resource in resources] == ["portal://finance/record"]
-        assert [template.uriTemplate for template in templates] == [
+        assert [str(template.uri_template) for template in templates] == [
             "portal://finance/records/{record_id}"
         ]
         assert [prompt.name for prompt in prompts] == ["finance_review"]
@@ -231,8 +233,8 @@ async def test_catalog_only_discloses_authorized_namespaces_and_components() -> 
             await server.read_resource("portal://hr/record")
         with pytest.raises(ValueError, match="Unknown resource"):
             await server.read_resource("portal://hr/records/employee-1")
-        with pytest.raises(ValueError, match="Unknown prompt"):
-            await server.get_prompt("hr_review")
+            with pytest.raises(ValueError, match="Unknown prompt"):
+                await server.render_prompt("hr_review")
     finally:
         auth_context_var.reset(context_token)
 
@@ -359,7 +361,7 @@ async def test_per_tool_deadline_and_concurrency_overrides_are_enforced() -> Non
 
     assert len(results) == 2
     assert maximum_active == 1
-    tool = server._tool_manager.get_tool("controlled_work")
+    tool = await server.get_tool("controlled_work")
     assert tool is not None
     assert enterprise.tool_timeout("controlled_work", tool.meta) == 0.2
     assert enterprise.tool_concurrency("controlled_work", tool.meta) == 1
@@ -515,19 +517,22 @@ def test_production_validation_rejects_unsafe_oauth_posture() -> None:
     safe.validate_production()
 
 
-def test_governed_provider_mounts_tools_resources_and_prompts() -> None:
+@pytest.mark.asyncio
+async def test_governed_provider_mounts_tools_resources_and_prompts() -> None:
     server = create_mcp(create_test_settings())
-    tool = next(tool for tool in server._tool_manager.list_tools() if tool.name == "health_ping")
+    tool = await server.get_tool("health_ping")
 
+    assert tool is not None
     assert tool.annotations is not None
     assert tool.annotations.readOnlyHint is True
     assert tool.meta["owner"] == "platform-engineering"
-    assert "portal://health/runtime/config" in server._resource_manager._resources
-    assert "portal://health/runtime/{section}" in server._resource_manager._templates
-    assert "health_diagnose" in server._prompt_manager._prompts
+    assert await server.get_resource("portal://health/runtime/config") is not None
+    assert await server.get_resource_template("portal://health/runtime/{section}") is not None
+    assert await server.get_prompt("health_diagnose") is not None
 
 
-def test_governed_tool_merges_explicit_and_inferred_semantics() -> None:
+@pytest.mark.asyncio
+async def test_governed_tool_merges_explicit_and_inferred_semantics() -> None:
     """Verify explicit annotations win while missing standard hints are inferred."""
     provider = NamespaceProvider("Example")
 
@@ -541,7 +546,7 @@ def test_governed_tool_merges_explicit_and_inferred_semantics() -> None:
 
     server = create_mcp(create_test_settings(), namespaces=())
     server.mount(provider, namespace="example")
-    tool = server._tool_manager.get_tool("example_update_record")
+    tool = await server.get_tool("example_update_record")
 
     assert tool is not None
     assert tool.title == "Example Update Record"
@@ -552,13 +557,97 @@ def test_governed_tool_merges_explicit_and_inferred_semantics() -> None:
     assert tool.annotations.destructiveHint is None
 
 
-def test_namespace_allowlist_controls_provider_admission() -> None:
+@pytest.mark.asyncio
+async def test_namespace_allowlist_controls_provider_admission() -> None:
     settings = replace(
         create_test_settings(),
         enterprise=EnterpriseSettings(namespace_allowlist=("missing",)),
     )
     server = create_mcp(settings)
-    assert server._tool_manager.list_tools() == []
+    assert await server.list_tools() == []
+
+
+@pytest.mark.asyncio
+async def test_remote_namespace_provider_preserves_namespaced_contract() -> None:
+    """Verify an isolated MCP server can be mounted behind a governed namespace."""
+    remote = FastMCP("remote-records")
+
+    @remote.tool(meta={"tags": ["readonly"]})
+    def lookup(record_id: str) -> str:
+        """Return one remote record identifier."""
+        return f"remote:{record_id}"
+
+    def create_remote(context) -> RemoteNamespaceProvider:
+        """Create the remote namespace boundary.
+
+        Args:
+            context: Namespace runtime context.
+
+        Returns:
+            Proxy provider for the isolated server.
+        """
+        _ = context
+        return RemoteNamespaceProvider.from_transport(remote, cache_ttl_seconds=0)
+
+    server = create_mcp(
+        create_test_settings(),
+        namespaces=[
+            Namespace(
+                "records",
+                create_remote,
+                description="Remote records.",
+                tags=frozenset({"readonly"}),
+                owner="records-team",
+                timeout_seconds=5,
+            )
+        ],
+    )
+
+    tools = await server.list_tools()
+    result = await server.call_tool("records_lookup", {"record_id": "42"})
+
+    assert [tool.name for tool in tools] == ["records_lookup"]
+    assert result.structured_content == {"result": "remote:42"}
+
+
+def test_unified_services_reach_namespace_contexts() -> None:
+    """Verify namespace infrastructure is resolved from the unified container."""
+
+    class Broker:
+        """Test credential broker."""
+
+        async def credential_for(self, identity, audience):
+            """Return a deterministic audience-bound credential.
+
+            Args:
+                identity: Verified invocation identity.
+                audience: Approved downstream audience.
+
+            Returns:
+                Deterministic test credential.
+            """
+            _ = identity
+            return f"credential:{audience}"
+
+    broker = Broker()
+    server = create_mcp(
+        create_test_settings(),
+        services=PortalServices(credential_broker=broker),
+    )
+
+    assert server.services.credential_broker is broker
+    assert server.namespace_runtimes[0].context.credentials is broker
+
+
+def test_multi_instance_production_rejects_process_local_state() -> None:
+    """Verify horizontal scaling requires distributed state adapters."""
+    settings = replace(
+        create_test_settings(),
+        enterprise=EnterpriseSettings(multi_instance=True),
+    )
+
+    with pytest.raises(ConfigurationPortalError, match="distributed quota"):
+        create_production_mcp(settings)
 
 
 @pytest.mark.asyncio

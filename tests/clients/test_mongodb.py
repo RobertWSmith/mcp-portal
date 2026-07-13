@@ -11,6 +11,7 @@ from mcp_portal.config import DatabaseSettings, MongoDBSettings
 from mcp_portal.errors import ConfigurationPortalError
 from mcp_portal.testing import create_test_settings
 
+
 def test_langchain_mongodb_factory_is_independent_of_database_provider(monkeypatch) -> None:
     """Verify LangChain MongoDB connectors do not depend on SQLAlchemy provider config."""
     settings = replace(
@@ -218,4 +219,3 @@ def test_langchain_mongodb_connector_reports_missing_required_settings() -> None
     )
     with pytest.raises(ConfigurationPortalError, match="collection alias"):
         configured_connector.loader(collection="unknown")
-

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from fastmcp import Client
 
@@ -126,7 +126,8 @@ def create_namespace_test_context(
             tags=frozenset({"test"}),
         ),
         selected_settings,
-        NamespaceDependencies(
+        replace(
+            dependencies,
             clients=dependencies.clients or default_client_factories(),
             redactor=dependencies.redactor
             or Redactor.from_secrets(
@@ -140,10 +141,6 @@ def create_namespace_test_context(
                 )
             ),
             clock=dependencies.clock,
-            egress=dependencies.egress,
-            credentials=dependencies.credentials,
-            tasks=dependencies.tasks,
-            telemetry=dependencies.telemetry,
         ),
     )
 

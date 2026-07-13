@@ -7,44 +7,25 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 import inspect
 
-from mcp.server.auth.settings import AuthSettings as SdkAuthSettings
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from mcp_portal.auth import create_auth_provider
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
-from mcp_portal.namespaces import Namespace, NamespaceDependencies, build_namespace_runtimes, iter_namespaces
+from mcp_portal.credentials import RejectingCredentialBroker
+from mcp_portal.egress import EgressPolicy
+from mcp_portal.errors import ConfigurationPortalError
+from mcp_portal.middleware import create_governance_middleware
+from mcp_portal.namespaces import Namespace, build_namespace_runtimes, iter_namespaces
 from mcp_portal.observability import configure_observability_environment, create_telemetry_recorder
+from mcp_portal.redaction import Redactor
+from mcp_portal.resilience import MemoryQuotaBackend
 from mcp_portal.server.runtime import PortalDependencies, PortalFastMCP
-
-def _sdk_auth_settings(settings: Settings) -> SdkAuthSettings | None:
-    """Build the SDK auth settings required when a token verifier is attached.
-
-    Args:
-        settings: Portal runtime settings containing auth configuration.
-
-    Returns:
-        SDK auth settings when authentication is enabled, otherwise None.
-    """
-    if not settings.auth.enabled:
-        return None
-
-    issuer_url = settings.auth.jwt_issuer or "http://localhost"
-    if not issuer_url.startswith(("http://", "https://")):
-        issuer_url = "http://localhost"
-
-    resource_path = settings.http.path
-    if not resource_path.startswith("/"):
-        resource_path = f"/{resource_path}"
-    return SdkAuthSettings(
-        issuer_url=issuer_url,
-        resource_server_url=(
-            settings.auth.resource_server_url or f"http://localhost{resource_path}"
-        ),
-        required_scopes=list(settings.auth.required_scopes),
-    )
+from mcp_portal.services import PortalServices
+from mcp_portal.tasks import MemoryTaskStore
+from mcp_portal.telemetry import TelemetryRecorder
 
 
 def create_mcp(
@@ -52,6 +33,7 @@ def create_mcp(
     namespaces: Sequence[Namespace] | None = None,
     include_production_middleware: bool | None = None,
     dependencies: PortalDependencies | None = None,
+    services: PortalServices | None = None,
 ) -> FastMCP:
     """Create the top-level FastMCP server and mount namespace servers.
 
@@ -59,22 +41,26 @@ def create_mcp(
         settings: Optional settings object. When omitted, settings are loaded from the
             environment.
         namespaces: Optional namespace registry. When omitted, the default namespaces are used.
-        include_production_middleware: Retained for CLI compatibility. The SDK
-            FastMCP server does not expose FastMCP 3 middleware hooks.
+        include_production_middleware: Whether operational request limits are active.
         dependencies: Optional service adapters for external clients, authorization,
             audit, quotas, approvals, tasks, telemetry, and cost accounting.
+        services: Preferred name for the unified deployment adapter container.
 
     Returns:
         A configured FastMCP server with all namespace servers mounted.
     """
     settings = settings or Settings.from_env()
-    dependencies = dependencies or PortalDependencies()
+    if dependencies is not None and services is not None:
+        raise ValueError("Pass either services or dependencies, not both")
+    services = services or dependencies or PortalServices()
     configure_observability_environment(settings)
-    shared_telemetry = dependencies.telemetry or create_telemetry_recorder(
-        settings, cost_sink=dependencies.cost_sink
+    shared_telemetry = services.telemetry or create_telemetry_recorder(
+        settings, cost_sink=services.cost_sink
     )
     namespace_manifests = tuple(
-        namespaces or iter_namespaces(strict=settings.namespace_discovery.strict)
+        namespaces
+        if namespaces is not None
+        else iter_namespaces(strict=settings.namespace_discovery.strict)
     )
     if settings.enterprise.namespace_allowlist:
         namespace_manifests = tuple(
@@ -83,35 +69,28 @@ def create_mcp(
             if namespace.name in settings.enterprise.namespace_allowlist
         )
     shared_clients = (
-        dependencies.clients.with_resilience(settings, telemetry=shared_telemetry)
-        if dependencies.clients is not None
+        services.clients.with_resilience(settings, telemetry=shared_telemetry)
+        if services.clients is not None
         else default_client_factories(settings, telemetry=shared_telemetry)
+    )
+    runtime_services = _resolve_portal_services(
+        settings,
+        services,
+        clients=shared_clients,
+        telemetry=shared_telemetry,
     )
     namespace_runtimes = build_namespace_runtimes(
         namespace_manifests,
         settings,
-        NamespaceDependencies(
-            clients=shared_clients,
-            tasks=dependencies.task_store,
-            telemetry=shared_telemetry,
-        ),
-    )
-    runtime_dependencies = replace(
-        dependencies,
-        clients=shared_clients,
-        telemetry=shared_telemetry,
+        runtime_services,
     )
     server = PortalFastMCP(
         name="MCP Portal",
         instructions="Use namespaced tools for portal capabilities.",
-        auth=_sdk_auth_settings(settings),
-        token_verifier=create_auth_provider(settings),
-        streamable_http_path=settings.http.path,
-        json_response=bool(settings.http.json_response),
-        stateless_http=bool(settings.http.stateless),
+        auth=create_auth_provider(settings),
         lifespan=create_portal_lifespan(shared_clients),
         portal_settings=settings,
-        dependencies=runtime_dependencies,
+        services=runtime_services,
         enforce_request_controls=(
             settings.middleware.enabled
             if include_production_middleware is None
@@ -120,6 +99,8 @@ def create_mcp(
     )
     server.namespace_runtimes = namespace_runtimes
     server.clients = shared_clients
+    for middleware in create_governance_middleware(server):
+        server.add_middleware(middleware)
 
     for runtime in namespace_runtimes:
         if not settings.namespace_enabled(runtime.namespace.name):
@@ -135,6 +116,7 @@ def create_production_mcp(
     settings: Settings | None = None,
     *,
     dependencies: PortalDependencies | None = None,
+    services: PortalServices | None = None,
 ) -> FastMCP:
     """Create the production FastMCP server.
 
@@ -142,6 +124,7 @@ def create_production_mcp(
         settings: Optional settings object. When omitted, settings are loaded from the
             environment.
         dependencies: Optional service adapters for production integrations.
+        services: Preferred name for production service adapters.
 
     Returns:
         A configured production server without development UI providers.
@@ -152,9 +135,81 @@ def create_production_mcp(
         selected_settings,
         include_production_middleware=True,
         dependencies=dependencies,
+        services=services,
     )
+    validate_production_services(server)
     add_operational_routes(server, selected_settings)
     return server
+
+
+def _resolve_portal_services(
+    settings: Settings,
+    services: PortalServices,
+    *,
+    clients: ClientFactories,
+    telemetry: TelemetryRecorder,
+) -> PortalServices:
+    """Resolve safe defaults once at the application composition root.
+
+    Args:
+        settings: Validated deployment configuration.
+        services: Explicit deployment adapter overrides.
+        clients: Shared lifecycle-managed client registry.
+        telemetry: Shared telemetry recorder.
+
+    Returns:
+        Fully resolved namespace-facing services.
+    """
+    redactor = services.redactor or Redactor.from_secrets(
+        (
+            settings.openai.api_key,
+            settings.azure_identity.client_secret,
+            settings.auth.static_token,
+            settings.auth.jwt_public_key,
+            settings.auth.ldap_bind_password,
+            settings.database.sqlalchemy_url,
+            settings.database.oracle_password,
+            settings.mongodb.connection_string,
+        )
+    )
+    return replace(
+        services,
+        clients=clients,
+        telemetry=telemetry,
+        redactor=redactor,
+        egress_policy=services.egress_policy
+        or EgressPolicy(
+            allowed_hosts=frozenset(
+                host.lower() for host in settings.enterprise.egress_allowed_hosts
+            )
+        ),
+        credential_broker=services.credential_broker or RejectingCredentialBroker(),
+        task_store=services.task_store
+        or MemoryTaskStore(
+            max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
+            max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
+        ),
+    )
+
+
+def validate_production_services(server: PortalFastMCP) -> None:
+    """Reject process-local state in a declared multi-instance deployment.
+
+    Args:
+        server: Fully composed production portal server.
+
+    Raises:
+        ConfigurationPortalError: If horizontally scaled state is process-local.
+    """
+    if not server.portal_settings.enterprise.multi_instance:
+        return
+    problems: list[str] = []
+    if isinstance(server.admission.quota_backend, MemoryQuotaBackend):
+        problems.append("multi-instance deployments require a distributed quota backend")
+    if isinstance(server.services.task_store, MemoryTaskStore):
+        problems.append("multi-instance deployments require a durable shared task store")
+    if problems:
+        raise ConfigurationPortalError("; ".join(problems))
 
 
 def create_portal_lifespan(clients: ClientFactories):
@@ -251,4 +306,3 @@ def add_operational_routes(server: FastMCP, settings: Settings) -> FastMCP:
         )
 
     return server
-

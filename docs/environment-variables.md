@@ -273,6 +273,7 @@ cache = connectors.cache()
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
 | `MCP_PORTAL_PRODUCTION_REQUIRE_AUTH` | `false` | No | Fail hardened production startup when no authentication provider is configured. Enable for every remotely reachable deployment. |
+| `MCP_PORTAL_MULTI_INSTANCE` | `false` | No | Require explicitly configured distributed quota and durable task adapters for horizontally scaled deployments. |
 | `MCP_PORTAL_REQUIRE_TENANT` | `false` | No | Deny authenticated tool calls without the configured verified tenant claim. Enable for multi-tenant deployments. |
 | `MCP_PORTAL_TENANT_CLAIM` | `tenant_id` | No | Verified token claim used to partition tenant state. |
 | `MCP_PORTAL_AUDIT_ENABLED` | `true` | No | Emit sanitized authorization and completion audit events. |

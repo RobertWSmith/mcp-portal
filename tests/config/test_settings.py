@@ -168,6 +168,7 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
                 "MCP_PORTAL_AUTHZ_TAG_SCOPES=admin=admin;write=portal.write",
                 "MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES=finance=finance.read;hr=hr.read hr.audit",
                 "MCP_PORTAL_MIDDLEWARE_ENABLED=true",
+                "MCP_PORTAL_MULTI_INSTANCE=true",
                 "MCP_PORTAL_RATE_LIMIT_PER_SECOND=7.5",
                 "MCP_PORTAL_RATE_LIMIT_BURST=11",
                 "MCP_PORTAL_RESPONSE_MAX_BYTES=2048",
@@ -213,6 +214,7 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
         "hr": ("hr.read", "hr.audit"),
     }
     assert settings.middleware.enabled is True
+    assert settings.enterprise.multi_instance is True
     assert settings.middleware.rate_limit_per_second == 7.5
     assert settings.middleware.rate_limit_burst == 11
     assert settings.middleware.response_max_bytes == 2048
@@ -398,5 +400,3 @@ def test_settings_from_env_file_can_override_existing_values(tmp_path: Path, mon
     settings = Settings.from_env(env_file, override=True)
 
     assert settings.openai_large_language_model == "large-from-file"
-
-

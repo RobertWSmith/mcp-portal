@@ -23,4 +23,3 @@ from mcp_portal.clients.registry import (
 )
 
 __all__ = [name for name in globals() if not name.startswith("__")]
-

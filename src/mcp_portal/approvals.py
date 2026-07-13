@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from mcp.server.fastmcp.tools import Tool
+from fastmcp.tools import Tool
 
 from mcp_portal.security import InvocationContext
 

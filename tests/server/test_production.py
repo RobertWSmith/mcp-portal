@@ -16,14 +16,12 @@ from mcp_portal.auth import create_auth_provider, create_authorization_checks
 from mcp_portal.config import (
     AuthSettings,
     HttpSettings,
-    MiddlewareSettings,
     ObservabilitySettings,
 )
 from mcp_portal.contracts import generate_tool_contract_manifest
 from mcp_portal.errors import ConfigurationPortalError
-from mcp_portal.middleware import create_production_middleware
 from mcp_portal.observability import configure_observability_environment
-import mcp_portal.server.factory as server_module
+from mcp_portal.namespaces import Namespace, NamespaceProvider
 from mcp_portal.server import create_mcp
 from mcp_portal.testing import create_test_settings
 
@@ -261,8 +259,8 @@ async def test_enterprise_scheme_middleware_translates_and_challenges() -> None:
     assert captured_scopes[2]["type"] == "websocket"
 
 
-def test_sdk_auth_settings_normalize_portal_configuration() -> None:
-    """Verify SDK auth settings are derived for authenticated HTTP servers."""
+def test_fastmcp_server_receives_portal_auth_provider() -> None:
+    """Verify authenticated servers use the configured FastMCP auth provider."""
     settings = replace(
         create_test_settings(),
         auth=AuthSettings(
@@ -273,12 +271,9 @@ def test_sdk_auth_settings_normalize_portal_configuration() -> None:
         http=HttpSettings(path="mcp"),
     )
 
-    auth_settings = server_module._sdk_auth_settings(settings)
+    server = create_mcp(settings)
 
-    assert auth_settings is not None
-    assert str(auth_settings.issuer_url) == "http://localhost/"
-    assert str(auth_settings.resource_server_url) == "http://localhost/mcp"
-    assert auth_settings.required_scopes == ["portal"]
+    assert server.auth is not None
 
 
 def test_authorization_checks_follow_tag_scope_settings() -> None:
@@ -288,28 +283,6 @@ def test_authorization_checks_follow_tag_scope_settings() -> None:
     checks = create_authorization_checks(settings)
 
     assert len(checks) == 4
-
-
-def test_production_middleware_can_be_forced_on_and_off() -> None:
-    """Verify production middleware composition follows the enable flag."""
-    settings = replace(
-        create_test_settings(),
-        middleware=MiddlewareSettings(
-            enabled=True,
-            rate_limit_per_second=0,
-            response_max_bytes=0,
-        ),
-    )
-
-    assert create_production_middleware(settings, enabled=False) == ()
-    middleware = create_production_middleware(settings, enabled=True)
-
-    assert [type(item).__name__ for item in middleware] == [
-        "ErrorHandlingMiddleware",
-        "AuthMiddleware",
-        "StructuredLoggingMiddleware",
-        "TimingMiddleware",
-    ]
 
 
 async def test_tool_contract_manifest_fingerprints_health_tools() -> None:
@@ -385,3 +358,56 @@ def test_namespace_discovery_records_optional_import_errors(monkeypatch) -> None
     monkeypatch.setattr(namespace_registry, "_DISCOVERED", False)
     with pytest.raises(ImportError):
         namespace_registry.iter_namespaces(strict=True)
+
+
+def test_namespace_discovery_loads_trusted_entry_points(monkeypatch) -> None:
+    """Verify explicit Python entry points contribute governed manifests."""
+
+    class EntryPoint:
+        """Minimal namespace entry-point test double."""
+
+        name = "finance"
+
+        def load(self):
+            """Return a zero-argument namespace manifest factory.
+
+            Returns:
+                Factory producing the trusted namespace manifest.
+            """
+
+            def create_manifest() -> Namespace:
+                """Create the test namespace manifest.
+
+                Returns:
+                    Trusted finance namespace.
+                """
+
+                def create_provider(context) -> NamespaceProvider:
+                    """Create an empty test provider.
+
+                    Args:
+                        context: Namespace runtime context.
+
+                    Returns:
+                        Empty finance provider.
+                    """
+                    _ = context
+                    return NamespaceProvider("Finance")
+
+                return Namespace("finance", create_provider)
+
+            return create_manifest
+
+    monkeypatch.setattr(namespace_registry, "_NAMESPACE_REGISTRY", {})
+    monkeypatch.setattr(namespace_registry, "_DISCOVERED", False)
+    monkeypatch.setattr(namespace_registry, "_DISCOVERY_ERRORS", {})
+    monkeypatch.setattr(namespace_registry, "_iter_namespace_module_names", list)
+    monkeypatch.setattr(
+        namespace_registry.importlib.metadata,
+        "entry_points",
+        lambda **kwargs: [EntryPoint()] if kwargs["group"] == "mcp_portal.namespaces" else [],
+    )
+
+    assert [namespace.name for namespace in namespace_registry.iter_namespaces(strict=True)] == [
+        "finance"
+    ]

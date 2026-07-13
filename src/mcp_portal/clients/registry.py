@@ -17,6 +17,7 @@ from mcp_portal.telemetry import OpenTelemetryRecorder, TelemetryRecorder
 ClientFactory = Callable[[], Any]
 ReadinessCheck = Callable[[], Any | Awaitable[Any]]
 
+
 @dataclass(frozen=True)
 class ClientFactories:
     """Registry of lazily constructed external clients.
@@ -285,4 +286,3 @@ class ClientFactories:
             settings.enterprise.downstream_timeout_seconds,
             telemetry or self.telemetry,
         )
-
