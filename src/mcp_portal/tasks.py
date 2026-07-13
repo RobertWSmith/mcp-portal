@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from mcp_portal.errors import PermissionPortalError, ValidationPortalError
 
@@ -33,6 +33,71 @@ class PortalTask:
     created_at: datetime
     expires_at: datetime
     result: Any = None
+
+
+class TaskStore(Protocol):
+    """Protocol implemented by authorization-bound task persistence adapters."""
+
+    def create(self, owner: str, tenant_id: str | None, ttl_seconds: int) -> PortalTask:
+        """Create a task owned by an authenticated actor and tenant.
+
+        Args:
+            owner: Authenticated task owner.
+            tenant_id: Trusted tenant partition.
+            ttl_seconds: Requested retention duration.
+
+        Returns:
+            Newly created task.
+        """
+        ...
+
+    def get(self, task_id: str, owner: str, tenant_id: str | None) -> PortalTask:
+        """Retrieve a task for its exact authorization context.
+
+        Args:
+            task_id: Opaque task identifier.
+            owner: Authenticated task owner.
+            tenant_id: Trusted tenant partition.
+
+        Returns:
+            Matching task.
+        """
+        ...
+
+    def update(
+        self,
+        task_id: str,
+        owner: str,
+        tenant_id: str | None,
+        *,
+        status: TaskStatus,
+        result: Any = None,
+    ) -> PortalTask:
+        """Update a task for its exact authorization context.
+
+        Args:
+            task_id: Opaque task identifier.
+            owner: Authenticated task owner.
+            tenant_id: Trusted tenant partition.
+            status: New task lifecycle state.
+            result: Optional task result.
+
+        Returns:
+            Updated task.
+        """
+        ...
+
+    def list(self, owner: str, tenant_id: str | None) -> tuple[PortalTask, ...]:
+        """List tasks visible to an authorization context.
+
+        Args:
+            owner: Authenticated task owner.
+            tenant_id: Trusted tenant partition.
+
+        Returns:
+            Visible tasks.
+        """
+        ...
 
 
 class MemoryTaskStore:

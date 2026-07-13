@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import logging
 import pkgutil
+import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,7 +20,7 @@ from mcp_portal.egress import EgressPolicy
 from mcp_portal.observability import create_telemetry_recorder
 from mcp_portal.redaction import Redactor
 from mcp_portal.security import InvocationContext, current_invocation
-from mcp_portal.tasks import MemoryTaskStore
+from mcp_portal.tasks import MemoryTaskStore, TaskStore
 from mcp_portal.telemetry import TelemetryRecorder, UsageMeasurement, UsageRecord
 from mcp_portal.tenancy import (
     TenantMongoDBConnectors,
@@ -31,6 +32,8 @@ from mcp_portal.tenancy import (
 Clock = Callable[[], datetime]
 NamespaceHealthCheck = Callable[["NamespaceContext"], "NamespaceStatus"]
 NamespaceState = Literal["ok", "warning", "error", "disabled"]
+_SEMANTIC_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].+)?$")
+_DATA_CLASSIFICATIONS = frozenset({"public", "internal", "confidential", "restricted"})
 
 
 @dataclass(frozen=True)
@@ -54,7 +57,7 @@ class NamespaceContext:
     clock: Clock
     egress: EgressPolicy
     credentials: CredentialBroker
-    tasks: MemoryTaskStore
+    tasks: TaskStore
     telemetry: TelemetryRecorder
 
     def now(self) -> datetime:
@@ -610,7 +613,7 @@ class NamespaceDependencies:
     clock: Clock | None = None
     egress: EgressPolicy | None = None
     credentials: CredentialBroker | None = None
-    tasks: MemoryTaskStore | None = None
+    tasks: TaskStore | None = None
     telemetry: TelemetryRecorder | None = None
 
 
@@ -846,3 +849,64 @@ def iter_namespaces(*, strict: bool = False) -> tuple[Namespace, ...]:
     """
     _discover_namespace_modules(strict=strict)
     return tuple(_NAMESPACE_REGISTRY[name] for name in sorted(_NAMESPACE_REGISTRY))
+
+
+def validate_namespace_metadata(namespace: Namespace) -> tuple[str, ...]:  # noqa: C901
+    """Validate one namespace manifest for governed production contribution.
+
+    Development callers may continue to use manifest defaults. This validator is intended
+    for CI and production admission, where ownership and lifecycle metadata must be explicit.
+
+    Args:
+        namespace: Namespace manifest to validate.
+
+    Returns:
+        Human-readable validation errors, or an empty tuple when valid.
+    """
+    errors: list[str] = []
+    prefix = f"namespace {namespace.name!r}"
+    if not namespace.description.strip():
+        errors.append(f"{prefix} must declare a description")
+    if not namespace.tags:
+        errors.append(f"{prefix} must declare at least one catalog tag")
+    if not namespace.owner.strip() or namespace.owner == "platform":
+        errors.append(f"{prefix} must declare a specific owner")
+    if not _SEMANTIC_VERSION.fullmatch(namespace.version):
+        errors.append(f"{prefix} version must use semantic versioning")
+    if namespace.data_classification not in _DATA_CLASSIFICATIONS:
+        errors.append(
+            f"{prefix} data classification must be one of "
+            f"{', '.join(sorted(_DATA_CLASSIFICATIONS))}"
+        )
+    if namespace.timeout_seconds is None or namespace.timeout_seconds <= 0:
+        errors.append(f"{prefix} must declare a positive timeout")
+    if any(not dependency.strip() for dependency in namespace.dependencies):
+        errors.append(f"{prefix} dependencies must not contain blank names")
+    if len(set(namespace.dependencies)) != len(namespace.dependencies):
+        errors.append(f"{prefix} dependencies must be unique")
+    if namespace.maturity == "deprecated":
+        if not namespace.deprecation_date:
+            errors.append(f"{prefix} must declare a deprecation date")
+        if not namespace.replacement:
+            errors.append(f"{prefix} must declare a replacement")
+    elif namespace.deprecation_date or namespace.replacement:
+        errors.append(f"{prefix} may use deprecation metadata only when deprecated")
+    return tuple(errors)
+
+
+def validate_namespaces(namespaces: Sequence[Namespace]) -> tuple[str, ...]:
+    """Validate a complete namespace catalog for strict CI admission.
+
+    Args:
+        namespaces: Complete catalog of namespace manifests.
+
+    Returns:
+        Human-readable catalog and manifest validation errors.
+    """
+    errors: list[str] = []
+    names = [namespace.name for namespace in namespaces]
+    if len(set(names)) != len(names):
+        errors.append("namespace catalog contains duplicate names")
+    for namespace in namespaces:
+        errors.extend(validate_namespace_metadata(namespace))
+    return tuple(errors)

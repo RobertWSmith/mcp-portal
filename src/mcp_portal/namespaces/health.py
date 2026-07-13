@@ -98,6 +98,7 @@ def health_status(context: NamespaceContext) -> NamespaceStatus:
         version="1.0.0",
         maturity="stable",
         data_classification="internal",
+        timeout_seconds=10.0,
     )
 )
 def create_provider(context: NamespaceContext) -> NamespaceProvider:
@@ -113,6 +114,11 @@ def create_provider(context: NamespaceContext) -> NamespaceProvider:
 
     @provider.tool(
         title="Portal Health Check",
+        description=(
+            "Confirm that the MCP server can execute tools.\n\n"
+            "Returns:\n"
+            "    Structured liveness state and acknowledgement.\n"
+        ),
         annotations=ToolAnnotations(
             title="Portal Health Check",
             readOnlyHint=True,
@@ -134,6 +140,11 @@ def create_provider(context: NamespaceContext) -> NamespaceProvider:
 
     @provider.tool(
         title="Public Runtime Configuration",
+        description=(
+            "Return non-secret runtime configuration for development.\n\n"
+            "Returns:\n"
+            "    Validated public runtime settings with secrets omitted.\n"
+        ),
         annotations=ToolAnnotations(
             title="Public Runtime Configuration",
             readOnlyHint=True,
