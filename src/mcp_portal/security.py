@@ -25,11 +25,21 @@ class InvocationIdentity:
         auth_method: Authentication method metadata.
     """
 
-    subject: str | None = None
-    tenant_id: str | None = None
-    client_id: str | None = None
-    scopes: frozenset[str] = field(default_factory=frozenset)
-    auth_method: str = "anonymous"
+    subject: str | None = field(
+        default=None, metadata={"description": "Human or workload subject identifier."}
+    )
+    tenant_id: str | None = field(
+        default=None, metadata={"description": "Trusted tenant partition identifier."}
+    )
+    client_id: str | None = field(
+        default=None, metadata={"description": "OAuth client application identifier."}
+    )
+    scopes: frozenset[str] = field(
+        metadata={"description": "Verified authorization scopes."}, default_factory=frozenset
+    )
+    auth_method: str = field(
+        default="anonymous", metadata={"description": "Authentication method metadata."}
+    )
 
 
 @dataclass(frozen=True)
@@ -43,10 +53,10 @@ class InvocationContext:
         deadline_seconds: Maximum execution duration.
     """
 
-    request_id: str
-    tool_name: str
-    identity: InvocationIdentity
-    deadline_seconds: float
+    request_id: str = field(metadata={"description": "Server-generated correlation identifier."})
+    tool_name: str = field(metadata={"description": "Fully-qualified mounted tool name."})
+    identity: InvocationIdentity = field(metadata={"description": "Verified caller identity."})
+    deadline_seconds: float = field(metadata={"description": "Maximum execution duration."})
 
 
 _invocation_context: contextvars.ContextVar[InvocationContext | None] = contextvars.ContextVar(

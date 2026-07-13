@@ -22,10 +22,14 @@ class PolicyDecision:
         obligations: Additional controls required during execution.
     """
 
-    allowed: bool
-    reason: str
-    required_scopes: frozenset[str] = field(default_factory=frozenset)
-    obligations: tuple[str, ...] = ()
+    allowed: bool = field(metadata={"description": "Whether execution may proceed."})
+    reason: str = field(metadata={"description": "Stable human-readable decision reason."})
+    required_scopes: frozenset[str] = field(
+        metadata={"description": "Scopes evaluated by the decision."}, default_factory=frozenset
+    )
+    obligations: tuple[str, ...] = field(
+        default=(), metadata={"description": "Additional controls required during execution."}
+    )
 
 
 class PolicyEngine(Protocol):

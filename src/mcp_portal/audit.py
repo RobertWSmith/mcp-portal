@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -32,18 +32,28 @@ class AuditEvent:
         duration_ms: Optional execution duration.
     """
 
-    occurred_at: str
-    event: str
-    request_id: str
-    tool_name: str
-    subject: str | None
-    tenant_id: str | None
-    client_id: str | None
-    argument_digest: str
-    allowed: bool | None = None
-    reason: str | None = None
-    outcome: str | None = None
-    duration_ms: float | None = None
+    occurred_at: str = field(metadata={"description": "UTC event timestamp."})
+    event: str = field(metadata={"description": "Lifecycle event type."})
+    request_id: str = field(metadata={"description": "Server-generated correlation identifier."})
+    tool_name: str = field(metadata={"description": "Fully-qualified tool name."})
+    subject: str | None = field(
+        metadata={"description": "Authenticated human or workload subject."}
+    )
+    tenant_id: str | None = field(metadata={"description": "Trusted tenant partition."})
+    client_id: str | None = field(metadata={"description": "Calling OAuth client identifier."})
+    argument_digest: str = field(
+        metadata={"description": "SHA-256 digest of canonicalized arguments."}
+    )
+    allowed: bool | None = field(
+        default=None, metadata={"description": "Optional authorization result."}
+    )
+    reason: str | None = field(default=None, metadata={"description": "Optional policy reason."})
+    outcome: str | None = field(
+        default=None, metadata={"description": "Optional completion outcome."}
+    )
+    duration_ms: float | None = field(
+        default=None, metadata={"description": "Optional execution duration."}
+    )
 
 
 @dataclass(frozen=True)
@@ -56,9 +66,15 @@ class AuditDetails:
         duration_ms: Optional execution duration.
     """
 
-    decision: PolicyDecision | None = None
-    outcome: str | None = None
-    duration_ms: float | None = None
+    decision: PolicyDecision | None = field(
+        default=None, metadata={"description": "Optional authorization decision."}
+    )
+    outcome: str | None = field(
+        default=None, metadata={"description": "Optional completion outcome."}
+    )
+    duration_ms: float | None = field(
+        default=None, metadata={"description": "Optional execution duration."}
+    )
 
 
 class AuditSink(Protocol):

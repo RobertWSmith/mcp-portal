@@ -7,7 +7,7 @@ import inspect
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol, TypeVar
 
@@ -44,8 +44,8 @@ class _Bucket:
         updated_at: Monotonic timestamp of the last refill.
     """
 
-    tokens: float
-    updated_at: float
+    tokens: float = field(metadata={"description": "Currently available units."})
+    updated_at: float = field(metadata={"description": "Monotonic timestamp of the last refill."})
 
 
 class MemoryQuotaBackend:
