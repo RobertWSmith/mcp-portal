@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from mcp_portal.errors import PermissionPortalError, ValidationPortalError
@@ -26,11 +26,15 @@ class TenantScope:
         subject_partition: Non-reversible tenant-and-subject partition token.
     """
 
-    tenant_id: str | None
-    subject: str | None
-    client_id: str | None
-    partition: str
-    subject_partition: str
+    tenant_id: str | None = field(metadata={"description": "Verified external tenant identifier."})
+    subject: str | None = field(metadata={"description": "Verified human or workload subject."})
+    client_id: str | None = field(metadata={"description": "Verified calling client identifier."})
+    partition: str = field(
+        metadata={"description": "Non-reversible stable storage partition token."}
+    )
+    subject_partition: str = field(
+        metadata={"description": "Non-reversible tenant-and-subject partition token."}
+    )
 
     @classmethod
     def from_invocation(

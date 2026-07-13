@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from mcp_portal.errors import PermissionPortalError, ValidationPortalError
@@ -18,8 +18,13 @@ class EgressPolicy:
         allow_private_networks: Whether literal private IP destinations are permitted.
     """
 
-    allowed_hosts: frozenset[str] = frozenset()
-    allow_private_networks: bool = False
+    allowed_hosts: frozenset[str] = field(
+        default=frozenset(), metadata={"description": "Optional exact DNS hostname allowlist."}
+    )
+    allow_private_networks: bool = field(
+        default=False,
+        metadata={"description": "Whether literal private IP destinations are permitted."},
+    )
 
     def validate_url(self, url: str) -> str:
         """Validate an outbound URL against scheme, host, and network boundaries.

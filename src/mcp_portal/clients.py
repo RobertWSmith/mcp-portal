@@ -31,13 +31,34 @@ class ClientFactories:
         shared_factories: Client names whose created objects are reused until shutdown.
     """
 
-    factories: Mapping[str, ClientFactory] = field(default_factory=dict)
-    shared_factories: frozenset[str] = field(default_factory=frozenset)
-    readiness_checks: Mapping[str, ReadinessCheck] = field(default_factory=dict)
-    circuit_breakers: CircuitBreakerRegistry = field(default_factory=CircuitBreakerRegistry)
-    downstream_timeout_seconds: float = 45.0
-    telemetry: TelemetryRecorder = field(default_factory=OpenTelemetryRecorder)
-    _shared_clients: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    factories: Mapping[str, ClientFactory] = field(
+        metadata={"description": "Mapping from client names to zero-argument factories."},
+        default_factory=dict,
+    )
+    shared_factories: frozenset[str] = field(
+        metadata={"description": "Client names whose created objects are reused until shutdown."},
+        default_factory=frozenset,
+    )
+    readiness_checks: Mapping[str, ReadinessCheck] = field(
+        metadata={"description": "Named downstream readiness checks."}, default_factory=dict
+    )
+    circuit_breakers: CircuitBreakerRegistry = field(
+        metadata={"description": "Registry of downstream circuit breakers."},
+        default_factory=CircuitBreakerRegistry,
+    )
+    downstream_timeout_seconds: float = field(
+        default=45.0, metadata={"description": "Default timeout for downstream calls in seconds."}
+    )
+    telemetry: TelemetryRecorder = field(
+        metadata={"description": "Recorder for downstream client telemetry."},
+        default_factory=OpenTelemetryRecorder,
+    )
+    _shared_clients: dict[str, Any] = field(
+        metadata={"description": "Cache of initialized shared clients."},
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """Normalize factory mappings after dataclass initialization."""
@@ -303,7 +324,9 @@ class MongoDBConnectors:
         settings: Runtime settings for MongoDB connectors.
     """
 
-    settings: MongoDBSettings
+    settings: MongoDBSettings = field(
+        metadata={"description": "Runtime settings for MongoDB connectors."}
+    )
 
     @property
     def connection_string(self) -> str:

@@ -144,10 +144,14 @@ class OpenAISettings:
         embedding_model: OpenAI model name for embedding tasks.
     """
 
-    api_key: str | None
-    large_language_model: str
-    small_language_model: str
-    embedding_model: str
+    api_key: str | None = field(metadata={"description": "Optional OpenAI platform API key."})
+    large_language_model: str = field(
+        metadata={"description": "OpenAI model name for larger language-model tasks."}
+    )
+    small_language_model: str = field(
+        metadata={"description": "OpenAI model name for smaller language-model tasks."}
+    )
+    embedding_model: str = field(metadata={"description": "OpenAI model name for embedding tasks."})
 
     @property
     def has_api_key(self) -> bool:
@@ -185,12 +189,25 @@ class AzureOpenAISettings:
         embedding_model_deployment: Deployment name for embedding tasks.
     """
 
-    endpoint: str | None = None
-    api_version: str | None = None
-    token_scope: str = DEFAULT_AZURE_OPENAI_TOKEN_SCOPE
-    large_language_model_deployment: str | None = None
-    small_language_model_deployment: str | None = None
-    embedding_model_deployment: str | None = None
+    endpoint: str | None = field(
+        default=None, metadata={"description": "Azure OpenAI resource endpoint."}
+    )
+    api_version: str | None = field(
+        default=None, metadata={"description": "Azure OpenAI API version used by SDK clients."}
+    )
+    token_scope: str = field(
+        default=DEFAULT_AZURE_OPENAI_TOKEN_SCOPE,
+        metadata={"description": "Azure resource scope requested from Azure Identity credentials."},
+    )
+    large_language_model_deployment: str | None = field(
+        default=None, metadata={"description": "Deployment name for larger language-model tasks."}
+    )
+    small_language_model_deployment: str | None = field(
+        default=None, metadata={"description": "Deployment name for smaller language-model tasks."}
+    )
+    embedding_model_deployment: str | None = field(
+        default=None, metadata={"description": "Deployment name for embedding tasks."}
+    )
 
     @property
     def deployments_configured(self) -> bool:
@@ -246,9 +263,20 @@ class AzureIdentitySettings:
         client_secret: Optional Azure client secret for service-principal auth.
     """
 
-    tenant_id: str | None = None
-    client_id: str | None = None
-    client_secret: str | None = None
+    tenant_id: str | None = field(
+        default=None,
+        metadata={"description": "Optional Azure tenant id for service-principal auth."},
+    )
+    client_id: str | None = field(
+        default=None,
+        metadata={
+            "description": "Optional Azure client/application id for service-principal auth."
+        },
+    )
+    client_secret: str | None = field(
+        default=None,
+        metadata={"description": "Optional Azure client secret for service-principal auth."},
+    )
 
     @property
     def service_principal_configured(self) -> bool:
@@ -281,7 +309,10 @@ class HealthSettings:
         enabled: Whether the health namespace tools should be mounted.
     """
 
-    enabled: bool = True
+    enabled: bool = field(
+        default=True,
+        metadata={"description": "Whether the health namespace tools should be mounted."},
+    )
 
     def public_snapshot(self) -> dict[str, bool]:
         """Return health settings safe to expose through development tools.
@@ -323,31 +354,89 @@ class AuthSettings:
         kerberos_scopes: Scopes granted to Kerberos-authenticated principals.
     """
 
-    provider: AuthProviderName = "none"
-    required_scopes: tuple[str, ...] = ()
-    static_token: str | None = None
-    static_client_id: str = "mcp-portal-static"
-    static_scopes: tuple[str, ...] = ()
-    jwt_public_key: str | None = None
-    jwt_jwks_uri: str | None = None
-    jwt_issuer: str | None = None
-    jwt_audience: str | None = None
-    jwt_algorithm: str = "RS256"
-    resource_server_url: str | None = None
-    ldap_uri: str | None = None
-    ldap_base_dn: str | None = None
-    ldap_user_dn_template: str | None = None
-    ldap_search_filter: str = "(uid={username})"
-    ldap_bind_dn: str | None = None
-    ldap_bind_password: str | None = None
-    ldap_start_tls: bool = False
-    ldap_ca_cert_file: str | None = None
-    ldap_connect_timeout: float = 5.0
-    ldap_scopes: tuple[str, ...] = ()
-    kerberos_hostname: str | None = None
-    kerberos_service: str = "HTTP"
-    kerberos_keytab: str | None = None
-    kerberos_scopes: tuple[str, ...] = ()
+    provider: AuthProviderName = field(
+        default="none", metadata={"description": "Authentication provider strategy."}
+    )
+    required_scopes: tuple[str, ...] = field(
+        default=(), metadata={"description": "Scopes required on every accepted bearer token."}
+    )
+    static_token: str | None = field(
+        default=None, metadata={"description": "Development-only static bearer token."}
+    )
+    static_client_id: str = field(
+        default="mcp-portal-static",
+        metadata={"description": "Client id attached to the static token."},
+    )
+    static_scopes: tuple[str, ...] = field(
+        default=(), metadata={"description": "Scopes attached to the static token."}
+    )
+    jwt_public_key: str | None = field(
+        default=None, metadata={"description": "Static JWT verification key or shared secret."}
+    )
+    jwt_jwks_uri: str | None = field(
+        default=None, metadata={"description": "Remote JWKS endpoint for JWT verification."}
+    )
+    jwt_issuer: str | None = field(
+        default=None, metadata={"description": "Optional expected JWT issuer."}
+    )
+    jwt_audience: str | None = field(
+        default=None, metadata={"description": "Optional expected JWT audience."}
+    )
+    jwt_algorithm: str = field(
+        default="RS256", metadata={"description": "JWT signing algorithm to accept."}
+    )
+    resource_server_url: str | None = field(
+        default=None, metadata={"description": "Canonical OAuth protected-resource URL."}
+    )
+    ldap_uri: str | None = field(
+        default=None, metadata={"description": "LDAP or LDAPS server URI."}
+    )
+    ldap_base_dn: str | None = field(
+        default=None, metadata={"description": "Directory search base used to resolve usernames."}
+    )
+    ldap_user_dn_template: str | None = field(
+        default=None,
+        metadata={"description": "Optional direct user DN template containing ``{username}``."},
+    )
+    ldap_search_filter: str = field(
+        default="(uid={username})",
+        metadata={"description": "LDAP search filter containing ``{username}``."},
+    )
+    ldap_bind_dn: str | None = field(
+        default=None,
+        metadata={"description": "Optional service-account DN used for directory searches."},
+    )
+    ldap_bind_password: str | None = field(
+        default=None,
+        metadata={"description": "Optional service-account password used for directory searches."},
+    )
+    ldap_start_tls: bool = field(
+        default=False,
+        metadata={"description": "Whether to upgrade an LDAP connection with StartTLS."},
+    )
+    ldap_ca_cert_file: str | None = field(
+        default=None,
+        metadata={"description": "Optional CA bundle used to verify the directory certificate."},
+    )
+    ldap_connect_timeout: float = field(
+        default=5.0, metadata={"description": "LDAP network and operation timeout in seconds."}
+    )
+    ldap_scopes: tuple[str, ...] = field(
+        default=(), metadata={"description": "Scopes granted to LDAP-authenticated principals."}
+    )
+    kerberos_hostname: str | None = field(
+        default=None, metadata={"description": "Hostname portion of the HTTP service principal."}
+    )
+    kerberos_service: str = field(
+        default="HTTP", metadata={"description": "Service portion of the HTTP service principal."}
+    )
+    kerberos_keytab: str | None = field(
+        default=None,
+        metadata={"description": "Optional keytab path used by the Kerberos acceptor."},
+    )
+    kerberos_scopes: tuple[str, ...] = field(
+        default=(), metadata={"description": "Scopes granted to Kerberos-authenticated principals."}
+    )
 
     @property
     def enabled(self) -> bool:
@@ -401,9 +490,15 @@ class AuthorizationSettings:
     """
 
     tag_scopes: dict[str, tuple[str, ...]] = field(
-        default_factory=lambda: dict(DEFAULT_TAG_SCOPE_RULES)
+        metadata={"description": "Mapping of FastMCP component tags to required OAuth scopes."},
+        default_factory=lambda: dict(DEFAULT_TAG_SCOPE_RULES),
     )
-    namespace_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    namespace_scopes: dict[str, tuple[str, ...]] = field(
+        metadata={
+            "description": "Deployment-level scopes required to discover or use a namespace."
+        },
+        default_factory=dict,
+    )
 
     @property
     def enabled(self) -> bool:
@@ -443,12 +538,26 @@ class MiddlewareSettings:
         response_max_bytes: Maximum serialized tool response size.
     """
 
-    enabled: bool = False
-    structured_logging: bool = True
-    include_payload_length: bool = True
-    rate_limit_per_second: float = 25.0
-    rate_limit_burst: int = 50
-    response_max_bytes: int = 1_000_000
+    enabled: bool = field(
+        default=False,
+        metadata={"description": "Whether production middleware should be attached automatically."},
+    )
+    structured_logging: bool = field(
+        default=True, metadata={"description": "Whether request logs should be emitted as JSON."}
+    )
+    include_payload_length: bool = field(
+        default=True, metadata={"description": "Whether request payload lengths should be logged."}
+    )
+    rate_limit_per_second: float = field(
+        default=25.0,
+        metadata={"description": "Sustained request rate allowed by the token bucket."},
+    )
+    rate_limit_burst: int = field(
+        default=50, metadata={"description": "Maximum burst capacity allowed by the token bucket."}
+    )
+    response_max_bytes: int = field(
+        default=1_000_000, metadata={"description": "Maximum serialized tool response size."}
+    )
 
     def public_snapshot(self) -> dict[str, object]:
         """Return middleware settings safe to expose through development tools.
@@ -478,11 +587,22 @@ class HttpSettings:
         stateless: Optional FastMCP stateless HTTP mode.
     """
 
-    path: str = "/mcp"
-    health_path: str = "/healthz"
-    readiness_path: str = "/readyz"
-    json_response: bool | None = None
-    stateless: bool | None = None
+    path: str = field(
+        default="/mcp", metadata={"description": "MCP endpoint path for HTTP-based transports."}
+    )
+    health_path: str = field(
+        default="/healthz", metadata={"description": "Unauthenticated liveness endpoint path."}
+    )
+    readiness_path: str = field(
+        default="/readyz",
+        metadata={"description": "Unauthenticated dependency-readiness endpoint path."},
+    )
+    json_response: bool | None = field(
+        default=None, metadata={"description": "Optional FastMCP JSON response mode."}
+    )
+    stateless: bool | None = field(
+        default=None, metadata={"description": "Optional FastMCP stateless HTTP mode."}
+    )
 
     def public_snapshot(self) -> dict[str, object]:
         """Return HTTP settings safe to expose through development tools.
@@ -522,21 +642,57 @@ class EnterpriseSettings:
         egress_allowed_hosts: Approved outbound DNS hostnames.
     """
 
-    require_auth: bool = False
-    require_tenant: bool = False
-    tenant_claim: str = "tenant_id"
-    audit_enabled: bool = True
-    tool_timeout_seconds: float = 45.0
-    tool_timeout_overrides: dict[str, float] = field(default_factory=dict)
-    max_concurrent_requests: int = 100
-    tool_concurrency_limits: dict[str, int] = field(default_factory=dict)
-    downstream_timeout_seconds: float = 45.0
-    circuit_breaker_failure_threshold: int = 5
-    circuit_breaker_recovery_seconds: float = 30.0
-    task_max_ttl_seconds: int = 3600
-    task_max_concurrent_per_subject: int = 10
-    egress_allowed_hosts: tuple[str, ...] = ()
-    namespace_allowlist: tuple[str, ...] = ()
+    require_auth: bool = field(
+        default=False,
+        metadata={"description": "Whether hardened production startup requires authentication."},
+    )
+    require_tenant: bool = field(
+        default=False, metadata={"description": "Whether requests must include a trusted tenant."}
+    )
+    tenant_claim: str = field(
+        default="tenant_id",
+        metadata={"description": "Verified token claim used for tenant partitioning."},
+    )
+    audit_enabled: bool = field(
+        default=True,
+        metadata={"description": "Whether request lifecycle audit events are emitted."},
+    )
+    tool_timeout_seconds: float = field(
+        default=45.0, metadata={"description": "Default maximum tool execution time."}
+    )
+    tool_timeout_overrides: dict[str, float] = field(
+        metadata={"description": "Fully-qualified tool-specific deadline overrides."},
+        default_factory=dict,
+    )
+    max_concurrent_requests: int = field(
+        default=100, metadata={"description": "Maximum in-process concurrent tool calls."}
+    )
+    tool_concurrency_limits: dict[str, int] = field(
+        metadata={"description": "Fully-qualified per-tool concurrency limits."},
+        default_factory=dict,
+    )
+    downstream_timeout_seconds: float = field(
+        default=45.0, metadata={"description": "Default deadline for downstream operations."}
+    )
+    circuit_breaker_failure_threshold: int = field(
+        default=5, metadata={"description": "Consecutive failures that open a circuit."}
+    )
+    circuit_breaker_recovery_seconds: float = field(
+        default=30.0, metadata={"description": "Cooldown before a half-open probe."}
+    )
+    task_max_ttl_seconds: int = field(
+        default=3600, metadata={"description": "Maximum task result retention period."}
+    )
+    task_max_concurrent_per_subject: int = field(
+        default=10, metadata={"description": "Maximum working tasks for one owner."}
+    )
+    egress_allowed_hosts: tuple[str, ...] = field(
+        default=(), metadata={"description": "Approved outbound DNS hostnames."}
+    )
+    namespace_allowlist: tuple[str, ...] = field(
+        default=(),
+        metadata={"description": "Namespaces allowed to load, or all namespaces when empty."},
+    )
 
     def public_snapshot(self) -> dict[str, object]:
         """Return non-secret enterprise posture metadata.
@@ -605,7 +761,10 @@ class NamespaceDiscoverySettings:
         strict: Whether namespace import failures should stop server startup.
     """
 
-    strict: bool = False
+    strict: bool = field(
+        default=False,
+        metadata={"description": "Whether namespace import failures should stop server startup."},
+    )
 
     def public_snapshot(self) -> dict[str, bool]:
         """Return namespace discovery settings safe to expose.
@@ -630,13 +789,29 @@ class ObservabilitySettings:
         pricing_version: Optional pricing table or contract version.
     """
 
-    service_name: str = "mcp-portal"
-    otlp_endpoint: str | None = None
-    metrics_enabled: bool = True
-    cost_accounting_enabled: bool = True
-    include_tenant_metrics: bool = False
-    cost_currency: str = "USD"
-    pricing_version: str | None = None
+    service_name: str = field(
+        default="mcp-portal",
+        metadata={"description": "Service name used by OpenTelemetry launchers."},
+    )
+    otlp_endpoint: str | None = field(
+        default=None, metadata={"description": "Optional OTLP collector endpoint."}
+    )
+    metrics_enabled: bool = field(
+        default=True, metadata={"description": "Whether runtime metrics are emitted."}
+    )
+    cost_accounting_enabled: bool = field(
+        default=True, metadata={"description": "Whether detailed usage records are emitted."}
+    )
+    include_tenant_metrics: bool = field(
+        default=False,
+        metadata={"description": "Whether tenant ID may be used as a metric dimension."},
+    )
+    cost_currency: str = field(
+        default="USD", metadata={"description": "Default currency for namespace usage records."}
+    )
+    pricing_version: str | None = field(
+        default=None, metadata={"description": "Optional pricing table or contract version."}
+    )
 
     @property
     def enabled(self) -> bool:
@@ -679,13 +854,28 @@ class DatabaseSettings:
         oracle_pool_max: Maximum Oracle checked-out connections including overflow.
     """
 
-    provider: DatabaseProviderName = "oracle"
-    sqlalchemy_url: str | None = None
-    oracle_dsn: str | None = None
-    oracle_user: str | None = None
-    oracle_password: str | None = None
-    oracle_pool_min: int = 1
-    oracle_pool_max: int = 4
+    provider: DatabaseProviderName = field(
+        default="oracle",
+        metadata={"description": "Preferred database provider for portal backends."},
+    )
+    sqlalchemy_url: str | None = field(
+        default=None,
+        metadata={"description": "Optional SQLAlchemy database URL for portable engines."},
+    )
+    oracle_dsn: str | None = field(default=None, metadata={"description": "Oracle database DSN."})
+    oracle_user: str | None = field(
+        default=None, metadata={"description": "Oracle database username."}
+    )
+    oracle_password: str | None = field(
+        default=None, metadata={"description": "Oracle database password."}
+    )
+    oracle_pool_min: int = field(
+        default=1, metadata={"description": "SQLAlchemy pool size for Oracle engines."}
+    )
+    oracle_pool_max: int = field(
+        default=4,
+        metadata={"description": "Maximum Oracle checked-out connections including overflow."},
+    )
 
     @property
     def oracle_configured(self) -> bool:
@@ -738,12 +928,20 @@ class MongoDBSettings:
         vector_search_index: Default Atlas Vector Search index name.
     """
 
-    connection_string: str | None = None
-    database_name: str | None = None
-    collections: Mapping[MongoDBCollectionName, str] = field(
-        default_factory=lambda: dict(DEFAULT_MONGODB_COLLECTIONS)
+    connection_string: str | None = field(
+        default=None, metadata={"description": "Optional MongoDB connection URI."}
     )
-    vector_search_index: str = DEFAULT_MONGODB_VECTOR_INDEX
+    database_name: str | None = field(
+        default=None, metadata={"description": "Optional default database for connector helpers."}
+    )
+    collections: Mapping[MongoDBCollectionName, str] = field(
+        metadata={"description": "Hard-coded collection aliases for connector helpers."},
+        default_factory=lambda: dict(DEFAULT_MONGODB_COLLECTIONS),
+    )
+    vector_search_index: str = field(
+        default=DEFAULT_MONGODB_VECTOR_INDEX,
+        metadata={"description": "Default Atlas Vector Search index name."},
+    )
 
     @property
     def configured(self) -> bool:
@@ -823,22 +1021,58 @@ class Settings:
         mongodb: MongoDB connector settings.
     """
 
-    openai: OpenAISettings
-    model_provider: ModelProviderName = "openai"
-    azure_openai: AzureOpenAISettings = field(default_factory=AzureOpenAISettings)
-    azure_identity: AzureIdentitySettings = field(default_factory=AzureIdentitySettings)
-    health: HealthSettings = field(default_factory=HealthSettings)
-    auth: AuthSettings = field(default_factory=AuthSettings)
-    authorization: AuthorizationSettings = field(default_factory=AuthorizationSettings)
-    middleware: MiddlewareSettings = field(default_factory=MiddlewareSettings)
-    http: HttpSettings = field(default_factory=HttpSettings)
-    enterprise: EnterpriseSettings = field(default_factory=EnterpriseSettings)
-    namespace_discovery: NamespaceDiscoverySettings = field(
-        default_factory=NamespaceDiscoverySettings
+    openai: OpenAISettings = field(
+        metadata={"description": "Settings for direct OpenAI platform calls."}
     )
-    observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
-    database: DatabaseSettings = field(default_factory=DatabaseSettings)
-    mongodb: MongoDBSettings = field(default_factory=MongoDBSettings)
+    model_provider: ModelProviderName = field(
+        default="openai",
+        metadata={"description": "Active model provider used by generic model settings."},
+    )
+    azure_openai: AzureOpenAISettings = field(
+        metadata={"description": "Settings for Azure OpenAI model calls."},
+        default_factory=AzureOpenAISettings,
+    )
+    azure_identity: AzureIdentitySettings = field(
+        metadata={"description": "Azure Identity environment settings."},
+        default_factory=AzureIdentitySettings,
+    )
+    health: HealthSettings = field(
+        metadata={"description": "Settings used by the health namespace."},
+        default_factory=HealthSettings,
+    )
+    auth: AuthSettings = field(
+        metadata={"description": "Authentication settings used by HTTP production transports."},
+        default_factory=AuthSettings,
+    )
+    authorization: AuthorizationSettings = field(
+        metadata={"description": "Authorization policy applied by production middleware."},
+        default_factory=AuthorizationSettings,
+    )
+    middleware: MiddlewareSettings = field(
+        metadata={"description": "Cross-cutting production middleware settings."},
+        default_factory=MiddlewareSettings,
+    )
+    http: HttpSettings = field(
+        metadata={"description": "HTTP and ASGI deployment settings."}, default_factory=HttpSettings
+    )
+    enterprise: EnterpriseSettings = field(
+        metadata={"description": "Enterprise."}, default_factory=EnterpriseSettings
+    )
+    namespace_discovery: NamespaceDiscoverySettings = field(
+        metadata={"description": "Namespace discovery behavior."},
+        default_factory=NamespaceDiscoverySettings,
+    )
+    observability: ObservabilitySettings = field(
+        metadata={"description": "Observability export metadata."},
+        default_factory=ObservabilitySettings,
+    )
+    database: DatabaseSettings = field(
+        metadata={"description": "Preferred database backend settings."},
+        default_factory=DatabaseSettings,
+    )
+    mongodb: MongoDBSettings = field(
+        metadata={"description": "MongoDB connector settings."}, default_factory=MongoDBSettings
+    )
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None, override: bool = False) -> "Settings":

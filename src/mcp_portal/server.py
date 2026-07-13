@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
 import inspect
 import json
 from collections.abc import Mapping, Sequence
@@ -82,14 +82,30 @@ class PortalDependencies:
         cost_sink: Detailed cost-accounting destination.
     """
 
-    clients: ClientFactories | None = None
-    policy_engine: PolicyEngine | None = None
-    audit_sink: AuditSink | None = None
-    quota_backend: QuotaBackend | None = None
-    approval_verifier: ApprovalVerifier | None = None
-    task_store: TaskStore | None = None
-    telemetry: TelemetryRecorder | None = None
-    cost_sink: CostSink | None = None
+    clients: ClientFactories | None = field(
+        default=None, metadata={"description": "Shared external client registry."}
+    )
+    policy_engine: PolicyEngine | None = field(
+        default=None, metadata={"description": "Authorization policy adapter."}
+    )
+    audit_sink: AuditSink | None = field(
+        default=None, metadata={"description": "Append-only audit destination."}
+    )
+    quota_backend: QuotaBackend | None = field(
+        default=None, metadata={"description": "Shared quota backend."}
+    )
+    approval_verifier: ApprovalVerifier | None = field(
+        default=None, metadata={"description": "Out-of-band approval verifier."}
+    )
+    task_store: TaskStore | None = field(
+        default=None, metadata={"description": "Authorization-bound task store."}
+    )
+    telemetry: TelemetryRecorder | None = field(
+        default=None, metadata={"description": "Metrics and cost-accounting recorder."}
+    )
+    cost_sink: CostSink | None = field(
+        default=None, metadata={"description": "Detailed cost-accounting destination."}
+    )
 
 
 @dataclass(frozen=True)
@@ -104,11 +120,13 @@ class _ToolCall:
         started: Monotonic invocation start time.
     """
 
-    name: str
-    arguments: dict[str, Any]
-    tool: Tool
-    invocation: InvocationContext
-    started: float
+    name: str = field(metadata={"description": "Mounted MCP tool name."})
+    arguments: dict[str, Any] = field(metadata={"description": "Validated invocation arguments."})
+    tool: Tool = field(metadata={"description": "Registered FastMCP tool."})
+    invocation: InvocationContext = field(
+        metadata={"description": "Trusted request and identity context."}
+    )
+    started: float = field(metadata={"description": "Monotonic invocation start time."})
 
 
 @dataclass(frozen=True)
@@ -124,12 +142,16 @@ class _TransportOverrides:
         stateless: Optional stateless HTTP mode.
     """
 
-    host: str | None = None
-    port: int | None = None
-    path: str | None = None
-    log_level: str | None = None
-    json_response: bool | None = None
-    stateless: bool | None = None
+    host: str | None = field(default=None, metadata={"description": "Optional HTTP bind host."})
+    port: int | None = field(default=None, metadata={"description": "Optional HTTP bind port."})
+    path: str | None = field(default=None, metadata={"description": "Optional HTTP endpoint path."})
+    log_level: str | None = field(default=None, metadata={"description": "Optional SDK log level."})
+    json_response: bool | None = field(
+        default=None, metadata={"description": "Optional JSON response mode."}
+    )
+    stateless: bool | None = field(
+        default=None, metadata={"description": "Optional stateless HTTP mode."}
+    )
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> "_TransportOverrides":

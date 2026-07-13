@@ -53,20 +53,22 @@ class RuntimeConfigResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    model_provider: dict[str, Any]
-    openai: dict[str, Any]
-    azure_openai: dict[str, Any]
-    azure_identity: dict[str, Any]
-    health: dict[str, Any]
-    auth: dict[str, Any]
-    authorization: dict[str, Any]
-    middleware: dict[str, Any]
-    http: dict[str, Any]
-    enterprise: dict[str, Any]
-    namespace_discovery: dict[str, Any]
-    observability: dict[str, Any]
-    database: dict[str, Any]
-    mongodb: dict[str, Any]
+    model_provider: dict[str, Any] = Field(
+        description="Active provider and model selection metadata."
+    )
+    openai: dict[str, Any] = Field(description="Direct OpenAI provider metadata.")
+    azure_openai: dict[str, Any] = Field(description="Azure OpenAI provider metadata.")
+    azure_identity: dict[str, Any] = Field(description="Azure identity configuration metadata.")
+    health: dict[str, Any] = Field(description="Health namespace configuration.")
+    auth: dict[str, Any] = Field(description="Authentication posture metadata.")
+    authorization: dict[str, Any] = Field(description="Authorization policy metadata.")
+    middleware: dict[str, Any] = Field(description="Request middleware configuration.")
+    http: dict[str, Any] = Field(description="HTTP transport configuration.")
+    enterprise: dict[str, Any] = Field(description="Enterprise control-plane configuration.")
+    namespace_discovery: dict[str, Any] = Field(description="Namespace discovery configuration.")
+    observability: dict[str, Any] = Field(description="Telemetry export configuration.")
+    database: dict[str, Any] = Field(description="Relational database configuration metadata.")
+    mongodb: dict[str, Any] = Field(description="MongoDB connector configuration metadata.")
 
 
 def health_status(context: NamespaceContext) -> NamespaceStatus:
