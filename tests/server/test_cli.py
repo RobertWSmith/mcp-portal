@@ -1,4 +1,4 @@
-"""Test command-line entry points, transports, and direct script execution."""
+"""Test command-line entry points and transport compatibility."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-import mcp_portal.server as server_module
+import mcp_portal.server as public_server_module
+import mcp_portal.server.cli as server_module
 
 
 class FakeMcp:
@@ -223,15 +224,15 @@ def test_module_entrypoint_invokes_main(monkeypatch) -> None:
         nonlocal called
         called = True
 
-    monkeypatch.setattr(server_module, "main", fake_main)
+    monkeypatch.setattr(public_server_module, "main", fake_main)
 
     runpy.run_module("mcp_portal.__main__", run_name="__main__")
 
     assert called is True
 
 
-def test_server_file_imports_without_src_on_pythonpath() -> None:
-    """Verify `mcp dev src/mcp_portal/server.py` can import the package."""
+def test_server_package_imports_without_src_on_pythonpath() -> None:
+    """Verify the installed server subpackage exposes the public API."""
     repo_root = Path(__file__).resolve().parents[1]
     import_script = f"""
 import importlib.util
@@ -246,14 +247,8 @@ sys.path = [
     if Path(path or ".").resolve() != src_path.resolve()
 ]
 
-spec = importlib.util.spec_from_file_location(
-    "portal_server_for_mcp_dev",
-    src_path / "mcp_portal" / "server.py",
-)
-module = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-sys.modules[spec.name] = module
-spec.loader.exec_module(module)
+sys.path.insert(0, str(src_path))
+import mcp_portal.server as module
 
 assert callable(module.create_mcp)
 assert any(Path(path).resolve() == src_path.resolve() for path in sys.path)
@@ -271,15 +266,14 @@ assert any(Path(path).resolve() == src_path.resolve() for path in sys.path)
     )
 
 
-def test_server_file_runs_as_script_without_src_on_pythonpath() -> None:
-    """Verify `mcp dev src/mcp_portal/server.py` launches the server script."""
+def test_server_package_runs_as_module() -> None:
+    """Verify the server subpackage provides a module entry point."""
     repo_root = Path(__file__).resolve().parents[1]
-    server_file = repo_root / "src" / "mcp_portal" / "server.py"
     env = os.environ.copy()
-    env.pop("PYTHONPATH", None)
+    env["PYTHONPATH"] = str(repo_root / "src")
 
     result = subprocess.run(
-        [sys.executable, str(server_file), "--help"],
+        [sys.executable, "-m", "mcp_portal.server", "--help"],
         cwd=repo_root,
         env=env,
         check=True,

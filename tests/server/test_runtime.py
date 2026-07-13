@@ -1,4 +1,4 @@
-"""Test governance, resilience, auditing, and other enterprise controls."""
+"""Test the governed server runtime and other enterprise controls."""
 
 from __future__ import annotations
 

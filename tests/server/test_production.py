@@ -1,4 +1,4 @@
-"""Test production authentication, integrations, lifecycle, and ASGI setup."""
+"""Test production server construction, integrations, lifecycle, and ASGI setup."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from mcp_portal.contracts import generate_tool_contract_manifest
 from mcp_portal.errors import ConfigurationPortalError
 from mcp_portal.middleware import create_production_middleware
 from mcp_portal.observability import configure_observability_environment
-import mcp_portal.server as server_module
+import mcp_portal.server.factory as server_module
 from mcp_portal.server import create_mcp
 from mcp_portal.testing import create_test_settings
 
