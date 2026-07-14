@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Protocol
@@ -32,16 +32,27 @@ class UsageMeasurement:
         pricing_version: Optional pricing table or contract version.
     """
 
-    provider: str
-    service: str
-    operation: str
-    quantity: int | float | Decimal | str
-    unit: str
-    namespace: str | None = None
-    sku: str | None = None
-    estimated_cost: int | float | Decimal | str | None = None
-    currency: str | None = None
-    pricing_version: str | None = None
+    provider: str = field(metadata={"description": "External provider or internal cost center."})
+    service: str = field(metadata={"description": "Metered service or product family."})
+    operation: str = field(metadata={"description": "Low-cardinality operation name."})
+    quantity: int | float | Decimal | str = field(metadata={"description": "Consumed quantity."})
+    unit: str = field(metadata={"description": "Unit of the consumed quantity."})
+    namespace: str | None = field(
+        default=None,
+        metadata={
+            "description": "Optional namespace reporting consumption. Trusted namespace contexts."
+        },
+    )
+    sku: str | None = field(
+        default=None, metadata={"description": "Optional model, deployment, or provider SKU."}
+    )
+    estimated_cost: int | float | Decimal | str | None = field(
+        default=None, metadata={"description": "Optional estimated monetary cost."}
+    )
+    currency: str | None = field(default=None, metadata={"description": "Optional currency code."})
+    pricing_version: str | None = field(
+        default=None, metadata={"description": "Optional pricing table or contract version."}
+    )
 
 
 @dataclass(frozen=True)
@@ -67,22 +78,34 @@ class UsageRecord:
         pricing_version: Pricing table or contract version used for the estimate.
     """
 
-    occurred_at: str
-    request_id: str
-    tool_name: str
-    namespace: str
-    subject: str | None
-    tenant_id: str | None
-    client_id: str | None
-    provider: str
-    service: str
-    operation: str
-    sku: str | None
-    quantity: str
-    unit: str
-    estimated_cost: str | None
-    currency: str
-    pricing_version: str | None
+    occurred_at: str = field(metadata={"description": "UTC event timestamp."})
+    request_id: str = field(metadata={"description": "Server-generated invocation identifier."})
+    tool_name: str = field(metadata={"description": "Fully-qualified MCP tool name."})
+    namespace: str = field(metadata={"description": "Namespace reporting consumption."})
+    subject: str | None = field(
+        metadata={"description": "Authenticated human or workload subject."}
+    )
+    tenant_id: str | None = field(metadata={"description": "Trusted tenant partition."})
+    client_id: str | None = field(metadata={"description": "Calling OAuth client identifier."})
+    provider: str = field(metadata={"description": "External provider or internal cost center."})
+    service: str = field(metadata={"description": "Metered service or product family."})
+    operation: str = field(metadata={"description": "Low-cardinality operation name."})
+    sku: str | None = field(
+        metadata={"description": "Optional model, deployment, or provider SKU."}
+    )
+    quantity: str = field(
+        metadata={"description": "Metered quantity represented as an exact decimal string."}
+    )
+    unit: str = field(
+        metadata={"description": "Unit such as input_token, request, document, or compute_second."}
+    )
+    estimated_cost: str | None = field(
+        metadata={"description": "Optional estimated cost represented as an exact decimal string."}
+    )
+    currency: str = field(metadata={"description": "ISO-style currency code for estimated cost."})
+    pricing_version: str | None = field(
+        metadata={"description": "Pricing table or contract version used for the estimate."}
+    )
 
     @classmethod
     def create(

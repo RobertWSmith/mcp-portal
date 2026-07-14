@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import secrets
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Protocol
 
@@ -26,13 +26,15 @@ class PortalTask:
         result: Optional terminal or intermediate result.
     """
 
-    task_id: str
-    owner: str
-    tenant_id: str | None
-    status: TaskStatus
-    created_at: datetime
-    expires_at: datetime
-    result: Any = None
+    task_id: str = field(metadata={"description": "Cryptographically random opaque identifier."})
+    owner: str = field(metadata={"description": "Authenticated task owner."})
+    tenant_id: str | None = field(metadata={"description": "Trusted tenant partition."})
+    status: TaskStatus = field(metadata={"description": "Current task lifecycle state."})
+    created_at: datetime = field(metadata={"description": "UTC creation timestamp."})
+    expires_at: datetime = field(metadata={"description": "UTC retention deadline."})
+    result: Any = field(
+        default=None, metadata={"description": "Optional terminal or intermediate result."}
+    )
 
 
 class TaskStore(Protocol):

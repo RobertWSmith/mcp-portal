@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -17,15 +17,26 @@ class Redactor:
         secret_key_markers: Lowercase key fragments that identify sensitive fields.
     """
 
-    secrets: tuple[str, ...] = ()
-    replacement: str = "[REDACTED]"
-    secret_key_markers: tuple[str, ...] = (
-        "authorization",
-        "bearer",
-        "credential",
-        "password",
-        "secret",
-        "token",
+    secrets: tuple[str, ...] = field(
+        default=(),
+        metadata={
+            "description": "Literal secret strings to replace when they appear in text values."
+        },
+    )
+    replacement: str = field(
+        default="[REDACTED]",
+        metadata={"description": "Placeholder used for removed secret values."},
+    )
+    secret_key_markers: tuple[str, ...] = field(
+        default=(
+            "authorization",
+            "bearer",
+            "credential",
+            "password",
+            "secret",
+            "token",
+        ),
+        metadata={"description": "Lowercase key fragments that identify sensitive fields."},
     )
 
     @classmethod
