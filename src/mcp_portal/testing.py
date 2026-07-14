@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 
 from fastmcp import Client
 
@@ -48,51 +48,21 @@ class SettingsOverrides:
         health_enabled: Whether the health namespace mounts.
     """
 
-    model_provider: ModelProviderName = field(
-        default="openai", metadata={"description": "Active test model provider."}
-    )
-    openai_api_key: str | None = field(
-        default="test-key", metadata={"description": "Optional test OpenAI API key."}
-    )
-    large_model: str = field(
-        default="large-model", metadata={"description": "Test large language model name."}
-    )
-    small_model: str = field(
-        default="small-model", metadata={"description": "Test small language model name."}
-    )
-    embedding_model: str = field(
-        default="embedding-model", metadata={"description": "Test embedding model name."}
-    )
-    azure_openai_endpoint: str | None = field(
-        default=None, metadata={"description": "Optional Azure OpenAI endpoint."}
-    )
-    azure_openai_api_version: str | None = field(
-        default=None, metadata={"description": "Optional Azure OpenAI API version."}
-    )
-    azure_openai_token_scope: str | None = field(
-        default=None, metadata={"description": "Optional Azure OpenAI token scope."}
-    )
-    azure_large_model_deployment: str | None = field(
-        default=None, metadata={"description": "Optional Azure large model deployment."}
-    )
-    azure_small_model_deployment: str | None = field(
-        default=None, metadata={"description": "Optional Azure small model deployment."}
-    )
-    azure_embedding_model_deployment: str | None = field(
-        default=None, metadata={"description": "Optional Azure embedding deployment."}
-    )
-    azure_tenant_id: str | None = field(
-        default=None, metadata={"description": "Optional Azure tenant id."}
-    )
-    azure_client_id: str | None = field(
-        default=None, metadata={"description": "Optional Azure client id."}
-    )
-    azure_client_secret: str | None = field(
-        default=None, metadata={"description": "Optional Azure client secret."}
-    )
-    health_enabled: bool = field(
-        default=True, metadata={"description": "Whether the health namespace mounts."}
-    )
+    model_provider: ModelProviderName = "openai"
+    openai_api_key: str | None = "test-key"
+    large_model: str = "large-model"
+    small_model: str = "small-model"
+    embedding_model: str = "embedding-model"
+    azure_openai_endpoint: str | None = None
+    azure_openai_api_version: str | None = None
+    azure_openai_token_scope: str | None = None
+    azure_large_model_deployment: str | None = None
+    azure_small_model_deployment: str | None = None
+    azure_embedding_model_deployment: str | None = None
+    azure_tenant_id: str | None = None
+    azure_client_id: str | None = None
+    azure_client_secret: str | None = None
+    health_enabled: bool = True
 
 
 def create_test_settings(overrides: SettingsOverrides | None = None) -> Settings:
@@ -156,7 +126,8 @@ def create_namespace_test_context(
             tags=frozenset({"test"}),
         ),
         selected_settings,
-        NamespaceDependencies(
+        replace(
+            dependencies,
             clients=dependencies.clients or default_client_factories(),
             redactor=dependencies.redactor
             or Redactor.from_secrets(
@@ -170,10 +141,6 @@ def create_namespace_test_context(
                 )
             ),
             clock=dependencies.clock,
-            egress=dependencies.egress,
-            credentials=dependencies.credentials,
-            tasks=dependencies.tasks,
-            telemetry=dependencies.telemetry,
         ),
     )
 

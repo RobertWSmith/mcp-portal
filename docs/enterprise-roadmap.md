@@ -55,8 +55,9 @@ do not leak into namespace business logic.
    Production deployments still need an OpenTelemetry SDK/exporter and a durable cost sink.
 10. **Supply-chain governance** — enforce namespace allowlists, dependency review, CodeQL,
     SBOM generation, Dependabot, signed release artifacts, and build provenance. Independently
-    owned or untrusted namespaces should eventually run behind a process or network isolation
-    boundary instead of being imported into the portal process.
+    owned or untrusted namespaces can use the implemented `RemoteNamespaceProvider` process or
+    network boundary instead of being imported into the portal process. Deployments still own
+    remote service identity, transport security, and availability policy.
 
 ## Production adapters still required
 

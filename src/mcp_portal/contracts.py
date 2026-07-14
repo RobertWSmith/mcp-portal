@@ -6,8 +6,8 @@ import hashlib
 import json
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
-from mcp.types import Tool
+from fastmcp import FastMCP
+from fastmcp.tools import Tool
 
 
 async def generate_tool_contract_manifest(server: FastMCP) -> dict[str, str]:
@@ -53,7 +53,9 @@ def tool_contract_payload(tool: Tool) -> dict[str, Any]:
     Returns:
         JSON-serializable contract fields visible to MCP clients.
     """
-    dumped = tool.model_dump(mode="json", by_alias=True, exclude_none=True)
+    dumped = tool.to_mcp_tool(name=tool.name).model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
     return {
         key: value
         for key, value in {

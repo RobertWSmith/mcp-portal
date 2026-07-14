@@ -1,4 +1,4 @@
-"""Test environment-backed settings parsing, defaults, and documentation."""
+"""Test aggregate environment-backed settings and production validation."""
 
 from __future__ import annotations
 
@@ -10,9 +10,6 @@ import pytest
 from mcp_portal.config import (
     ENVIRONMENT_VARIABLE_NAMES,
     Settings,
-    _bool_env,
-    _optional_env,
-    _resolve_env_file,
 )
 
 PORTAL_ENV_NAMES = tuple(sorted(ENVIRONMENT_VARIABLE_NAMES))
@@ -36,7 +33,7 @@ def clean_portal_environment():
 
 def test_environment_documentation_matches_settings() -> None:
     """Verify environment examples and reference docs cover the implemented settings."""
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[2]
     documented_names: set[str] = set()
     for line in (
         (project_root / "docs" / "environment-variables.md")
@@ -165,12 +162,15 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
             [
                 "MCP_PORTAL_AUTH_PROVIDER=jwt",
                 "MCP_PORTAL_AUTH_REQUIRED_SCOPES=portal.read,portal.write",
+                "MCP_PORTAL_AUTH_REQUIRED_LINUX_GROUPS=portal-users,portal-auditors",
                 "MCP_PORTAL_AUTH_JWT_JWKS_URI=https://issuer.example/.well-known/jwks.json",
                 "MCP_PORTAL_AUTH_JWT_ISSUER=https://issuer.example",
                 "MCP_PORTAL_AUTH_JWT_AUDIENCE=mcp-portal",
                 "MCP_PORTAL_AUTHZ_TAG_SCOPES=admin=admin;write=portal.write",
                 "MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES=finance=finance.read;hr=hr.read hr.audit",
+                "MCP_PORTAL_AUTHZ_NAMESPACE_LINUX_GROUPS=finance=finance-users;hr=hr-users hr-auditors",
                 "MCP_PORTAL_MIDDLEWARE_ENABLED=true",
+                "MCP_PORTAL_MULTI_INSTANCE=true",
                 "MCP_PORTAL_RATE_LIMIT_PER_SECOND=7.5",
                 "MCP_PORTAL_RATE_LIMIT_BURST=11",
                 "MCP_PORTAL_RESPONSE_MAX_BYTES=2048",
@@ -206,6 +206,7 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
 
     assert settings.auth.provider == "jwt"
     assert settings.auth.required_scopes == ("portal.read", "portal.write")
+    assert settings.auth.required_linux_groups == ("portal-users", "portal-auditors")
     assert settings.auth.jwt_jwks_uri == "https://issuer.example/.well-known/jwks.json"
     assert settings.authorization.tag_scopes == {
         "admin": ("admin",),
@@ -215,7 +216,12 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
         "finance": ("finance.read",),
         "hr": ("hr.read", "hr.audit"),
     }
+    assert settings.authorization.namespace_linux_groups == {
+        "finance": ("finance-users",),
+        "hr": ("hr-users", "hr-auditors"),
+    }
     assert settings.middleware.enabled is True
+    assert settings.enterprise.multi_instance is True
     assert settings.middleware.rate_limit_per_second == 7.5
     assert settings.middleware.rate_limit_burst == 11
     assert settings.middleware.response_max_bytes == 2048
@@ -401,38 +407,3 @@ def test_settings_from_env_file_can_override_existing_values(tmp_path: Path, mon
     settings = Settings.from_env(env_file, override=True)
 
     assert settings.openai_large_language_model == "large-from-file"
-
-
-def test_resolve_env_file_prefers_explicit_path(tmp_path: Path) -> None:
-    """Verify explicit dotenv paths are returned unchanged."""
-    env_file = tmp_path / "custom.env"
-
-    assert _resolve_env_file(env_file) == env_file
-
-
-def test_optional_env_strips_blank_values(monkeypatch) -> None:
-    """Verify blank optional environment variables normalize to None."""
-    monkeypatch.setenv("OPTIONAL_VALUE", "   ")
-
-    assert _optional_env("OPTIONAL_VALUE") is None
-
-
-def test_optional_env_returns_missing_values(monkeypatch) -> None:
-    """Verify missing optional environment variables normalize to None."""
-    monkeypatch.delenv("OPTIONAL_VALUE", raising=False)
-
-    assert _optional_env("OPTIONAL_VALUE") is None
-
-
-def test_bool_env_parses_boolean_values(monkeypatch) -> None:
-    """Verify boolean environment values are normalized."""
-    monkeypatch.setenv("BOOLEAN_VALUE", "off")
-
-    assert _bool_env("BOOLEAN_VALUE", default=True) is False
-
-
-def test_bool_env_uses_default_for_invalid_values(monkeypatch) -> None:
-    """Verify invalid boolean environment values fall back to the default."""
-    monkeypatch.setenv("BOOLEAN_VALUE", "sometimes")
-
-    assert _bool_env("BOOLEAN_VALUE", default=True) is True

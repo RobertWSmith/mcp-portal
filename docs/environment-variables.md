@@ -88,6 +88,7 @@ production transports.
 | --- | --- | --- | --- |
 | `MCP_PORTAL_AUTH_PROVIDER` | `none` | No | Authentication provider. Accepted values are `none`, `static`, `jwt`, `ldap`, `kerberos`, and `ldap+kerberos`; unsupported values fall back to `none`. |
 | `MCP_PORTAL_AUTH_REQUIRED_SCOPES` | unset | No | Scopes required on every accepted bearer token. Accepts comma-separated or space-separated values. |
+| `MCP_PORTAL_AUTH_REQUIRED_LINUX_GROUPS` | unset | No | Linux/NSS groups required for every authenticated subject. All configured memberships must be present; unresolved users fail closed. |
 | `MCP_PORTAL_AUTH_STATIC_TOKEN` | unset | When provider is `static` | Static bearer token for local smoke tests. Static auth is not recommended for remote production deployments. |
 | `MCP_PORTAL_AUTH_STATIC_CLIENT_ID` | `mcp-portal-static` | No | Client id attached to the static token. |
 | `MCP_PORTAL_AUTH_STATIC_SCOPES` | unset | No | Scopes attached to the static token. If unset, static auth uses `MCP_PORTAL_AUTH_REQUIRED_SCOPES`. |
@@ -151,6 +152,7 @@ MCP_PORTAL_AUTH_KERBEROS_KEYTAB=/run/secrets/mcp-portal.keytab
 | --- | --- | --- | --- |
 | `MCP_PORTAL_AUTHZ_TAG_SCOPES` | `admin=admin;destructive=admin;external=external;write=write` | No | Maps FastMCP component tags to required OAuth scopes for production authorization checks. |
 | `MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES` | unset | No | Maps namespace names to scopes required for discovery and access. Unauthorized namespace tools, resources, templates, and prompts are omitted from catalog responses. |
+| `MCP_PORTAL_AUTHZ_NAMESPACE_LINUX_GROUPS` | unset | No | Maps namespace names to required Linux/NSS groups. All listed memberships are required for discovery and direct access. |
 
 Rules are separated by semicolons. Each rule uses `=` or `:` between the tag and its
 scopes. Scopes can be comma-separated or space-separated.
@@ -160,11 +162,17 @@ Example:
 ```dotenv
 MCP_PORTAL_AUTHZ_TAG_SCOPES=admin=portal.admin;write=portal.write portal.audit
 MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES=finance=finance.read;hr=hr.read hr.audit
+MCP_PORTAL_AUTHZ_NAMESPACE_LINUX_GROUPS=finance=finance-users;hr=hr-users hr-auditors
 ```
 
 If the tag value is malformed, MCP Portal falls back to the default tag rules. A malformed
 namespace value falls back to no deployment-specific namespace rules; manifest-level
 `required_scopes` continue to apply.
+
+Linux groups are resolved on each request from the authenticated subject through the host's
+NSS configuration, including the primary group. Kerberos principals use the local-name portion
+before `@`. Run the portal on Linux with the relevant local, LDAP, or SSSD-backed NSS users and
+groups available. Group rules are ignored only when authentication itself is disabled.
 
 ## Production Middleware Settings
 
@@ -273,6 +281,7 @@ cache = connectors.cache()
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
 | `MCP_PORTAL_PRODUCTION_REQUIRE_AUTH` | `false` | No | Fail hardened production startup when no authentication provider is configured. Enable for every remotely reachable deployment. |
+| `MCP_PORTAL_MULTI_INSTANCE` | `false` | No | Require explicitly configured distributed quota and durable task adapters for horizontally scaled deployments. |
 | `MCP_PORTAL_REQUIRE_TENANT` | `false` | No | Deny authenticated tool calls without the configured verified tenant claim. Enable for multi-tenant deployments. |
 | `MCP_PORTAL_TENANT_CLAIM` | `tenant_id` | No | Verified token claim used to partition tenant state. |
 | `MCP_PORTAL_AUDIT_ENABLED` | `true` | No | Emit sanitized authorization and completion audit events. |

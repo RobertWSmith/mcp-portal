@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import logging
-import pkgutil
 import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -20,6 +20,10 @@ from mcp_portal.egress import EgressPolicy
 from mcp_portal.observability import create_telemetry_recorder
 from mcp_portal.redaction import Redactor
 from mcp_portal.security import InvocationContext, current_invocation
+from mcp_portal.services import (
+    NamespaceDependencies as NamespaceDependencies,
+    PortalServices,
+)
 from mcp_portal.tasks import MemoryTaskStore, TaskStore
 from mcp_portal.telemetry import TelemetryRecorder, UsageMeasurement, UsageRecord
 from mcp_portal.tenancy import (
@@ -34,6 +38,8 @@ NamespaceHealthCheck = Callable[["NamespaceContext"], "NamespaceStatus"]
 NamespaceState = Literal["ok", "warning", "error", "disabled"]
 _SEMANTIC_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].+)?$")
 _DATA_CLASSIFICATIONS = frozenset({"public", "internal", "confidential", "restricted"})
+BUILTIN_NAMESPACE_MODULES = ("mcp_portal.namespaces.health",)
+NAMESPACE_ENTRY_POINT_GROUP = "mcp_portal.namespaces"
 
 
 @dataclass(frozen=True)
@@ -49,26 +55,16 @@ class NamespaceContext:
         clock: Time provider used by tools and tests.
     """
 
-    name: str = field(
-        metadata={"description": "Namespace prefix used when mounting provider components."}
-    )
-    settings: Settings = field(metadata={"description": "Shared runtime settings."})
-    logger: logging.Logger = field(metadata={"description": "Logger scoped to this namespace."})
-    redactor: Redactor = field(
-        metadata={"description": "Redactor used before exposing diagnostics."}
-    )
-    clients: ClientFactories = field(
-        metadata={"description": "Registry of external client factories."}
-    )
-    clock: Clock = field(metadata={"description": "Time provider used by tools and tests."})
-    egress: EgressPolicy = field(metadata={"description": "Outbound network access policy."})
-    credentials: CredentialBroker = field(
-        metadata={"description": "Broker for runtime credentials."}
-    )
-    tasks: TaskStore = field(metadata={"description": "Store for durable task state."})
-    telemetry: TelemetryRecorder = field(
-        metadata={"description": "Recorder for usage and operational telemetry."}
-    )
+    name: str
+    settings: Settings
+    logger: logging.Logger
+    redactor: Redactor
+    clients: ClientFactories
+    clock: Clock
+    egress: EgressPolicy
+    credentials: CredentialBroker
+    tasks: TaskStore
+    telemetry: TelemetryRecorder
 
     def now(self) -> datetime:
         """Return the current time from the namespace clock.
@@ -231,30 +227,14 @@ class ToolContribution:
         structured_output: Optional structured-output override.
     """
 
-    function: Callable[..., Any] = field(
-        metadata={"description": "Callable implementing the tool."}
-    )
-    name: str | None = field(
-        default=None, metadata={"description": "Optional unqualified MCP tool name."}
-    )
-    title: str | None = field(
-        default=None, metadata={"description": "Optional human-readable title."}
-    )
-    description: str | None = field(
-        default=None, metadata={"description": "Optional public description."}
-    )
-    annotations: ToolAnnotations | None = field(
-        default=None, metadata={"description": "Standard MCP tool behavior hints."}
-    )
-    icons: tuple[Icon, ...] = field(
-        default=(), metadata={"description": "Optional client-display icons."}
-    )
-    meta: Mapping[str, Any] = field(
-        metadata={"description": "Portal-specific governance metadata."}, default_factory=dict
-    )
-    structured_output: bool | None = field(
-        default=None, metadata={"description": "Optional structured-output override."}
-    )
+    function: Callable[..., Any]
+    name: str | None = None
+    title: str | None = None
+    description: str | None = None
+    annotations: ToolAnnotations | None = None
+    icons: tuple[Icon, ...] = ()
+    meta: Mapping[str, Any] = field(default_factory=dict)
+    structured_output: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -273,31 +253,15 @@ class ResourceContribution:
         meta: Portal-specific governance metadata.
     """
 
-    function: Callable[..., Any] = field(
-        metadata={"description": "Callable that reads or renders the resource."}
-    )
-    uri: str = field(metadata={"description": "Stable resource URI or URI template."})
-    name: str | None = field(
-        default=None, metadata={"description": "Optional unqualified display name."}
-    )
-    title: str | None = field(
-        default=None, metadata={"description": "Optional human-readable title."}
-    )
-    description: str | None = field(
-        default=None, metadata={"description": "Optional public description."}
-    )
-    mime_type: str | None = field(
-        default=None, metadata={"description": "Optional content MIME type."}
-    )
-    icons: tuple[Icon, ...] = field(
-        default=(), metadata={"description": "Optional client-display icons."}
-    )
-    annotations: Annotations | None = field(
-        default=None, metadata={"description": "Standard MCP resource hints."}
-    )
-    meta: Mapping[str, Any] = field(
-        metadata={"description": "Portal-specific governance metadata."}, default_factory=dict
-    )
+    function: Callable[..., Any]
+    uri: str
+    name: str | None = None
+    title: str | None = None
+    description: str | None = None
+    mime_type: str | None = None
+    icons: tuple[Icon, ...] = ()
+    annotations: Annotations | None = None
+    meta: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def is_template(self) -> bool:
@@ -321,21 +285,11 @@ class PromptContribution:
         icons: Optional client-display icons.
     """
 
-    function: Callable[..., Any] = field(
-        metadata={"description": "Callable that renders the prompt."}
-    )
-    name: str | None = field(
-        default=None, metadata={"description": "Optional unqualified MCP prompt name."}
-    )
-    title: str | None = field(
-        default=None, metadata={"description": "Optional human-readable title."}
-    )
-    description: str | None = field(
-        default=None, metadata={"description": "Optional public description."}
-    )
-    icons: tuple[Icon, ...] = field(
-        default=(), metadata={"description": "Optional client-display icons."}
-    )
+    function: Callable[..., Any]
+    name: str | None = None
+    title: str | None = None
+    description: str | None = None
+    icons: tuple[Icon, ...] = ()
 
 
 class NamespaceProvider:
@@ -545,11 +499,9 @@ class NamespaceStatus:
         details: Optional redacted-safe diagnostic details.
     """
 
-    state: NamespaceState = field(metadata={"description": "Machine-readable namespace state."})
-    message: str = field(metadata={"description": "Human-readable status summary."})
-    details: Mapping[str, Any] = field(
-        metadata={"description": "Optional redacted-safe diagnostic details."}, default_factory=dict
-    )
+    state: NamespaceState
+    message: str
+    details: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalize status details after dataclass initialization."""
@@ -583,52 +535,20 @@ class Namespace:
         health_check: Optional callback that reports namespace status.
     """
 
-    name: str = field(
-        metadata={"description": "Prefix used when mounting the namespace into the parent server."}
-    )
-    create: NamespaceFactory = field(
-        metadata={
-            "description": "Factory that builds the namespace child server from shared context."
-        }
-    )
-    description: str = field(
-        default="", metadata={"description": "Human-readable namespace purpose."}
-    )
-    tags: frozenset[str] = field(
-        metadata={"description": "Stable metadata tags for filtering and documentation."},
-        default_factory=frozenset,
-    )
-    health_check: NamespaceHealthCheck | None = field(
-        default=None, metadata={"description": "Optional callback that reports namespace status."}
-    )
-    owner: str = field(
-        default="platform", metadata={"description": "Team responsible for the namespace."}
-    )
-    version: str = field(default="1.0.0", metadata={"description": "Namespace contract version."})
-    maturity: Literal["experimental", "beta", "stable", "deprecated"] = field(
-        default="stable", metadata={"description": "Namespace lifecycle maturity."}
-    )
-    data_classification: str = field(
-        default="internal",
-        metadata={"description": "Classification of data handled by the namespace."},
-    )
-    required_scopes: frozenset[str] = field(
-        metadata={"description": "Scopes required to access the namespace."},
-        default_factory=frozenset,
-    )
-    timeout_seconds: float | None = field(
-        default=None, metadata={"description": "Optional namespace execution timeout in seconds."}
-    )
-    dependencies: tuple[str, ...] = field(
-        default=(), metadata={"description": "Names of required namespaces."}
-    )
-    deprecation_date: str | None = field(
-        default=None,
-        metadata={"description": "Optional date when the namespace becomes deprecated."},
-    )
-    replacement: str | None = field(
-        default=None, metadata={"description": "Optional replacement for a deprecated namespace."}
-    )
+    name: str
+    create: NamespaceFactory
+    description: str = ""
+    tags: frozenset[str] = field(default_factory=frozenset)
+    health_check: NamespaceHealthCheck | None = None
+    owner: str = "platform"
+    version: str = "1.0.0"
+    maturity: Literal["experimental", "beta", "stable", "deprecated"] = "stable"
+    data_classification: str = "internal"
+    required_scopes: frozenset[str] = field(default_factory=frozenset)
+    timeout_seconds: float | None = None
+    dependencies: tuple[str, ...] = ()
+    deprecation_date: str | None = None
+    replacement: str | None = None
 
     def __post_init__(self) -> None:
         """Normalize namespace metadata after dataclass initialization."""
@@ -659,80 +579,25 @@ class NamespaceMetadata:
         replacement: Optional replacement namespace name.
     """
 
-    name: str = field(metadata={"description": "Prefix used when mounting the namespace."})
-    description: str = field(
-        default="", metadata={"description": "Human-readable namespace purpose."}
-    )
-    tags: frozenset[str] = field(
-        metadata={"description": "Stable metadata tags."}, default_factory=frozenset
-    )
-    health_check: NamespaceHealthCheck | None = field(
-        default=None, metadata={"description": "Optional namespace health callback."}
-    )
-    owner: str = field(default="platform", metadata={"description": "Owning team or service."})
-    version: str = field(default="1.0.0", metadata={"description": "Namespace contract version."})
-    maturity: Literal["experimental", "beta", "stable", "deprecated"] = field(
-        default="stable", metadata={"description": "Namespace lifecycle maturity."}
-    )
-    data_classification: str = field(
-        default="internal", metadata={"description": "Highest expected data classification."}
-    )
-    required_scopes: frozenset[str] = field(
-        metadata={"description": "Code-owned baseline access scopes."}, default_factory=frozenset
-    )
-    timeout_seconds: float | None = field(
-        default=None, metadata={"description": "Optional namespace timeout metadata."}
-    )
-    dependencies: tuple[str, ...] = field(
-        default=(), metadata={"description": "Registered external dependency names."}
-    )
-    deprecation_date: str | None = field(
-        default=None, metadata={"description": "Optional planned deprecation date."}
-    )
-    replacement: str | None = field(
-        default=None, metadata={"description": "Optional replacement namespace name."}
-    )
+    name: str
+    description: str = ""
+    tags: frozenset[str] = field(default_factory=frozenset)
+    health_check: NamespaceHealthCheck | None = None
+    owner: str = "platform"
+    version: str = "1.0.0"
+    maturity: Literal["experimental", "beta", "stable", "deprecated"] = "stable"
+    data_classification: str = "internal"
+    required_scopes: frozenset[str] = field(default_factory=frozenset)
+    timeout_seconds: float | None = None
+    dependencies: tuple[str, ...] = ()
+    deprecation_date: str | None = None
+    replacement: str | None = None
 
     def __post_init__(self) -> None:
         """Normalize iterable metadata after dataclass initialization."""
         object.__setattr__(self, "tags", frozenset(self.tags))
         object.__setattr__(self, "required_scopes", frozenset(self.required_scopes))
         object.__setattr__(self, "dependencies", tuple(self.dependencies))
-
-
-@dataclass(frozen=True)
-class NamespaceDependencies:
-    """Shared services used to build namespace runtime contexts.
-
-    Attributes:
-        clients: Shared external client registry.
-        redactor: Shared diagnostic redactor.
-        clock: Optional namespace clock.
-        egress: Shared outbound destination policy.
-        credentials: Shared downstream credential broker.
-        tasks: Shared authorization-bound task store.
-        telemetry: Shared telemetry recorder.
-    """
-
-    clients: ClientFactories | None = field(
-        default=None, metadata={"description": "Shared external client registry."}
-    )
-    redactor: Redactor | None = field(
-        default=None, metadata={"description": "Shared diagnostic redactor."}
-    )
-    clock: Clock | None = field(default=None, metadata={"description": "Optional namespace clock."})
-    egress: EgressPolicy | None = field(
-        default=None, metadata={"description": "Shared outbound destination policy."}
-    )
-    credentials: CredentialBroker | None = field(
-        default=None, metadata={"description": "Shared downstream credential broker."}
-    )
-    tasks: TaskStore | None = field(
-        default=None, metadata={"description": "Shared authorization-bound task store."}
-    )
-    telemetry: TelemetryRecorder | None = field(
-        default=None, metadata={"description": "Shared telemetry recorder."}
-    )
 
 
 @dataclass(frozen=True)
@@ -744,10 +609,8 @@ class NamespaceRuntime:
         context: Runtime context built for the namespace.
     """
 
-    namespace: Namespace = field(metadata={"description": "Namespace manifest."})
-    context: NamespaceContext = field(
-        metadata={"description": "Runtime context built for the namespace."}
-    )
+    namespace: Namespace
+    context: NamespaceContext
 
 
 _NAMESPACE_REGISTRY: dict[str, Namespace] = {}
@@ -809,7 +672,7 @@ def register_namespace(
 def build_namespace_runtimes(
     namespaces: Sequence[Namespace],
     settings: Settings,
-    dependencies: NamespaceDependencies | None = None,
+    dependencies: PortalServices | None = None,
 ) -> tuple[NamespaceRuntime, ...]:
     """Build runtime contexts for a group of namespaces.
 
@@ -821,7 +684,7 @@ def build_namespace_runtimes(
     Returns:
         Runtime objects ready for mounting and diagnostics.
     """
-    dependencies = dependencies or NamespaceDependencies()
+    dependencies = dependencies or PortalServices()
     shared_clients = dependencies.clients or default_client_factories(settings)
     shared_redactor = dependencies.redactor or Redactor.from_secrets(
         (
@@ -835,22 +698,23 @@ def build_namespace_runtimes(
             settings.mongodb.connection_string,
         )
     )
-    shared_egress = dependencies.egress or EgressPolicy(
+    shared_egress = dependencies.egress_policy or EgressPolicy(
         allowed_hosts=frozenset(host.lower() for host in settings.enterprise.egress_allowed_hosts)
     )
-    shared_credentials = dependencies.credentials or RejectingCredentialBroker()
-    shared_tasks = dependencies.tasks or MemoryTaskStore(
+    shared_credentials = dependencies.credential_broker or RejectingCredentialBroker()
+    shared_tasks = dependencies.task_store or MemoryTaskStore(
         max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
         max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
     )
     shared_telemetry = dependencies.telemetry or create_telemetry_recorder(settings)
-    runtime_dependencies = NamespaceDependencies(
+    runtime_dependencies = replace(
+        dependencies,
         clients=shared_clients,
         redactor=shared_redactor,
         clock=dependencies.clock,
-        egress=shared_egress,
-        credentials=shared_credentials,
-        tasks=shared_tasks,
+        egress_policy=shared_egress,
+        credential_broker=shared_credentials,
+        task_store=shared_tasks,
         telemetry=shared_telemetry,
     )
 
@@ -870,7 +734,7 @@ def build_namespace_runtimes(
 def build_namespace_context(
     namespace: Namespace,
     settings: Settings,
-    dependencies: NamespaceDependencies,
+    dependencies: PortalServices,
 ) -> NamespaceContext:
     """Build the runtime context for one namespace.
 
@@ -889,9 +753,9 @@ def build_namespace_context(
         redactor=dependencies.redactor or Redactor(),
         clients=dependencies.clients or default_client_factories(settings),
         clock=dependencies.clock or utc_now,
-        egress=dependencies.egress or EgressPolicy(),
-        credentials=dependencies.credentials or RejectingCredentialBroker(),
-        tasks=dependencies.tasks
+        egress=dependencies.egress_policy or EgressPolicy(),
+        credentials=dependencies.credential_broker or RejectingCredentialBroker(),
+        tasks=dependencies.task_store
         or MemoryTaskStore(
             max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
             max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
@@ -910,7 +774,7 @@ def utc_now() -> datetime:
 
 
 def _discover_namespace_modules(*, strict: bool = False) -> None:
-    """Import namespace modules so their registration decorators run.
+    """Load explicit built-ins and trusted namespace entry points.
 
     Args:
         strict: Whether import failures should be raised instead of recorded.
@@ -931,21 +795,49 @@ def _discover_namespace_modules(*, strict: bool = False) -> None:
             _DISCOVERY_ERRORS[module_name] = f"{type(error).__name__}: {error}"
             logger.warning("Skipping namespace module %s: %s", module_name, error)
 
+    _load_namespace_entry_points(strict=strict, logger=logger)
+
     _DISCOVERED = True
 
 
+def _load_namespace_entry_points(*, strict: bool, logger: logging.Logger) -> None:
+    """Load namespace manifests from the trusted Python entry-point group.
+
+    Args:
+        strict: Whether plugin failures should stop discovery.
+        logger: Logger receiving safe discovery diagnostics.
+    """
+    for entry_point in importlib.metadata.entry_points(group=NAMESPACE_ENTRY_POINT_GROUP):
+        key = f"entrypoint:{entry_point.name}"
+        try:
+            loaded = entry_point.load()
+            namespace = (
+                loaded() if callable(loaded) and not isinstance(loaded, Namespace) else loaded
+            )
+            if namespace is None:
+                continue
+            if not isinstance(namespace, Namespace):
+                raise TypeError(
+                    "namespace entry point must load a Namespace or zero-argument factory"
+                )
+            existing = _NAMESPACE_REGISTRY.get(namespace.name)
+            if existing is not None and existing != namespace:
+                raise ValueError(f"Namespace {namespace.name!r} is already registered")
+            _NAMESPACE_REGISTRY[namespace.name] = namespace
+        except Exception as error:
+            if strict:
+                raise
+            _DISCOVERY_ERRORS[key] = f"{type(error).__name__}: {error}"
+            logger.warning("Skipping namespace entry point %s: %s", entry_point.name, error)
+
+
 def _iter_namespace_module_names() -> list[str]:
-    """Return importable namespace module names in deterministic order.
+    """Return the explicit built-in namespace modules.
 
     Returns:
-        Child module names inside the namespace package.
+        Stable built-in module names.
     """
-    module_infos = pkgutil.iter_modules(__path__, prefix=f"{__name__}.")
-    return sorted(
-        module_info.name
-        for module_info in module_infos
-        if not module_info.name.rsplit(".", maxsplit=1)[-1].startswith("_")
-    )
+    return list(BUILTIN_NAMESPACE_MODULES)
 
 
 def iter_namespace_discovery_errors() -> dict[str, str]:

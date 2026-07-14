@@ -1,4 +1,4 @@
-"""Test command-line entry points, transports, and direct script execution."""
+"""Test command-line entry points and transport compatibility."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-import mcp_portal.server as server_module
+import mcp_portal.server as public_server_module
+import mcp_portal.server.cli as server_module
 
 
 class FakeMcp:
@@ -158,14 +159,14 @@ def test_sse_rejects_stateless_mode() -> None:
     assert exc_info.value.code == 2
 
 
-def test_portal_fastmcp_run_maps_legacy_transport_options(monkeypatch) -> None:
-    """Verify the SDK adapter maps legacy CLI run options onto SDK settings."""
+def test_portal_fastmcp_run_uses_fastmcp_transport_options(monkeypatch) -> None:
+    """Verify the portal delegates transport options to FastMCP 3 unchanged."""
     calls = []
     server = server_module.PortalFastMCP("Test")
 
-    def fake_run(self, transport="stdio", mount_path=None) -> None:
-        """Record the SDK transport that would have run."""
-        calls.append((self, transport, mount_path))
+    def fake_run(self, transport="stdio", show_banner=None, **kwargs) -> None:
+        """Record the FastMCP transport that would have run."""
+        calls.append((self, transport, show_banner, kwargs))
 
     monkeypatch.setattr(server_module.FastMCP, "run", fake_run)
 
@@ -181,37 +182,37 @@ def test_portal_fastmcp_run_maps_legacy_transport_options(monkeypatch) -> None:
     )
     server.run(transport="sse", path="/events")
 
-    assert [(transport, mount_path) for _, transport, mount_path in calls] == [
-        ("streamable-http", None),
-        ("sse", "/events"),
-    ]
-    assert server.settings.host == "127.0.0.1"
-    assert server.settings.port == 9001
-    assert server.settings.streamable_http_path == "/events"
-    assert server.settings.log_level == "DEBUG"
-    assert server.settings.json_response is True
-    assert server.settings.stateless_http is True
+    assert calls[0][1:] == (
+        "http",
+        False,
+        {
+            "host": "127.0.0.1",
+            "port": 9001,
+            "path": "/custom",
+            "log_level": "debug",
+            "json_response": True,
+            "stateless": True,
+        },
+    )
+    assert calls[1][1:] == ("sse", None, {"path": "/events"})
 
 
-def test_portal_fastmcp_http_app_applies_legacy_options(monkeypatch) -> None:
-    """Verify the ASGI compatibility wrapper applies HTTP options."""
+def test_portal_fastmcp_http_app_delegates_to_fastmcp(monkeypatch) -> None:
+    """Verify the ASGI wrapper delegates HTTP options to FastMCP 3."""
     server = server_module.PortalFastMCP("Test")
 
-    def fake_streamable_http_app(self):
+    def fake_http_app(self, *args, **kwargs):
         """Return a placeholder ASGI app."""
-        return {"app": self.settings.streamable_http_path}
+        return {"args": args, "kwargs": kwargs}
 
-    monkeypatch.setattr(
-        server_module.FastMCP,
-        "streamable_http_app",
-        fake_streamable_http_app,
-    )
+    monkeypatch.setattr(server_module.FastMCP, "http_app", fake_http_app)
 
     app = server.http_app(path="/mcp", json_response=True, stateless_http=True)
 
-    assert app == {"app": "/mcp"}
-    assert server.settings.json_response is True
-    assert server.settings.stateless_http is True
+    assert app == {
+        "args": (),
+        "kwargs": {"path": "/mcp", "json_response": True, "stateless_http": True},
+    }
 
 
 def test_module_entrypoint_invokes_main(monkeypatch) -> None:
@@ -223,15 +224,15 @@ def test_module_entrypoint_invokes_main(monkeypatch) -> None:
         nonlocal called
         called = True
 
-    monkeypatch.setattr(server_module, "main", fake_main)
+    monkeypatch.setattr(public_server_module, "main", fake_main)
 
     runpy.run_module("mcp_portal.__main__", run_name="__main__")
 
     assert called is True
 
 
-def test_server_file_imports_without_src_on_pythonpath() -> None:
-    """Verify `mcp dev src/mcp_portal/server.py` can import the package."""
+def test_server_package_imports_without_src_on_pythonpath() -> None:
+    """Verify the installed server subpackage exposes the public API."""
     repo_root = Path(__file__).resolve().parents[1]
     import_script = f"""
 import importlib.util
@@ -246,14 +247,8 @@ sys.path = [
     if Path(path or ".").resolve() != src_path.resolve()
 ]
 
-spec = importlib.util.spec_from_file_location(
-    "portal_server_for_mcp_dev",
-    src_path / "mcp_portal" / "server.py",
-)
-module = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-sys.modules[spec.name] = module
-spec.loader.exec_module(module)
+sys.path.insert(0, str(src_path))
+import mcp_portal.server as module
 
 assert callable(module.create_mcp)
 assert any(Path(path).resolve() == src_path.resolve() for path in sys.path)
@@ -271,15 +266,14 @@ assert any(Path(path).resolve() == src_path.resolve() for path in sys.path)
     )
 
 
-def test_server_file_runs_as_script_without_src_on_pythonpath() -> None:
-    """Verify `mcp dev src/mcp_portal/server.py` launches the server script."""
+def test_server_package_runs_as_module() -> None:
+    """Verify the server subpackage provides a module entry point."""
     repo_root = Path(__file__).resolve().parents[1]
-    server_file = repo_root / "src" / "mcp_portal" / "server.py"
     env = os.environ.copy()
-    env.pop("PYTHONPATH", None)
+    env["PYTHONPATH"] = str(repo_root / "src")
 
     result = subprocess.run(
-        [sys.executable, str(server_file), "--help"],
+        [sys.executable, "-m", "mcp_portal.server", "--help"],
         cwd=repo_root,
         env=env,
         check=True,

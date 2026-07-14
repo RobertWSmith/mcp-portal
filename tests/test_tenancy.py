@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from mcp_portal.clients import ClientFactories
 from mcp_portal.config import AuthSettings, EnterpriseSettings
@@ -294,7 +294,7 @@ async def test_policy_rejects_spoofed_tenant_arguments_and_missing_claims() -> N
         """Read tenant data."""
         return tenant_id
 
-    tool = child._tool_manager.get_tool("read")
+    tool = await child.get_tool("read")
     assert tool is not None
     engine = ScopePolicyEngine(settings)
     spoofed = await engine.authorize(invocation(), tool, {"tenant_id": "tenant-b"})
@@ -319,7 +319,7 @@ async def test_cross_tenant_override_requires_explicit_admin_scope() -> None:
         """Inspect another tenant as an administrator."""
         return tenant_id
 
-    tool = child._tool_manager.get_tool("inspect_tenant")
+    tool = await child.get_tool("inspect_tenant")
     assert tool is not None
     engine = ScopePolicyEngine(settings)
     denied = await engine.authorize(invocation(), tool, {"tenant_id": "tenant-b"})
