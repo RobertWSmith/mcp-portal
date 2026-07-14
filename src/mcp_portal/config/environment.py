@@ -7,18 +7,18 @@ from collections.abc import Callable
 from pathlib import Path
 
 from mcp_portal.config.constants import (
-    AuthProviderName,
-    DatabaseProviderName,
     DEFAULT_AZURE_OPENAI_TOKEN_SCOPE,
     DEFAULT_MONGODB_VECTOR_INDEX,
     DEFAULT_TAG_SCOPE_RULES,
+    PROJECT_ROOT,
+    AuthProviderName,
+    DatabaseProviderName,
     EnvironmentVariable,
     ModelProviderName,
-    PROJECT_ROOT,
 )
 from mcp_portal.config.models import (
-    AuthSettings,
     AuthorizationSettings,
+    AuthSettings,
     AzureIdentitySettings,
     AzureOpenAISettings,
     DatabaseSettings,
@@ -96,9 +96,7 @@ def _auth_settings_from_env() -> AuthSettings:
     """
     return AuthSettings(
         provider=_auth_provider_env(EnvironmentVariable.MCP_PORTAL_AUTH_PROVIDER, default="none"),
-        required_linux_groups=_csv_env(
-            EnvironmentVariable.MCP_PORTAL_AUTH_REQUIRED_LINUX_GROUPS
-        ),
+        required_linux_groups=_csv_env(EnvironmentVariable.MCP_PORTAL_AUTH_REQUIRED_LINUX_GROUPS),
         required_scopes=_csv_env(EnvironmentVariable.MCP_PORTAL_AUTH_REQUIRED_SCOPES),
         static_token=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_STATIC_TOKEN),
         static_client_id=os.getenv(
