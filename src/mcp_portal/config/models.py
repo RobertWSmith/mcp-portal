@@ -183,6 +183,7 @@ class AuthSettings:
     Attributes:
         provider: Authentication provider strategy.
         required_scopes: Scopes required on every accepted bearer token.
+        required_linux_groups: Linux groups required for every authenticated caller.
         static_token: Development-only static bearer token.
         static_client_id: Client id attached to the static token.
         static_scopes: Scopes attached to the static token.
@@ -209,6 +210,7 @@ class AuthSettings:
 
     provider: AuthProviderName = "none"
     required_scopes: tuple[str, ...] = ()
+    required_linux_groups: tuple[str, ...] = ()
     static_token: str | None = None
     static_client_id: str = "mcp-portal-static"
     static_scopes: tuple[str, ...] = ()
@@ -252,6 +254,7 @@ class AuthSettings:
             "enabled": self.enabled,
             "provider": self.provider,
             "required_scopes": list(self.required_scopes),
+            "required_linux_groups": list(self.required_linux_groups),
             "static_token_configured": self.static_token is not None,
             "static_scopes": list(self.static_scopes),
             "jwt_public_key_configured": self.jwt_public_key is not None,
@@ -282,12 +285,14 @@ class AuthorizationSettings:
     Attributes:
         tag_scopes: Mapping of FastMCP component tags to required OAuth scopes.
         namespace_scopes: Deployment-level scopes required to discover or use a namespace.
+        namespace_linux_groups: Linux groups required to discover or use a namespace.
     """
 
     tag_scopes: dict[str, tuple[str, ...]] = field(
         default_factory=lambda: dict(DEFAULT_TAG_SCOPE_RULES)
     )
     namespace_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    namespace_linux_groups: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def enabled(self) -> bool:
@@ -296,7 +301,7 @@ class AuthorizationSettings:
         Returns:
             True when at least one tag-to-scope rule is configured.
         """
-        return bool(self.tag_scopes or self.namespace_scopes)
+        return bool(self.tag_scopes or self.namespace_scopes or self.namespace_linux_groups)
 
     def public_snapshot(self) -> dict[str, object]:
         """Return authorization policy safe to expose through development tools.
@@ -310,6 +315,10 @@ class AuthorizationSettings:
             "namespace_scopes": {
                 namespace: list(scopes)
                 for namespace, scopes in sorted(self.namespace_scopes.items())
+            },
+            "namespace_linux_groups": {
+                namespace: list(groups)
+                for namespace, groups in sorted(self.namespace_linux_groups.items())
             },
         }
 

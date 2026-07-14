@@ -96,6 +96,9 @@ def _auth_settings_from_env() -> AuthSettings:
     """
     return AuthSettings(
         provider=_auth_provider_env(EnvironmentVariable.MCP_PORTAL_AUTH_PROVIDER, default="none"),
+        required_linux_groups=_csv_env(
+            EnvironmentVariable.MCP_PORTAL_AUTH_REQUIRED_LINUX_GROUPS
+        ),
         required_scopes=_csv_env(EnvironmentVariable.MCP_PORTAL_AUTH_REQUIRED_SCOPES),
         static_token=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_STATIC_TOKEN),
         static_client_id=os.getenv(
@@ -147,6 +150,10 @@ def _authorization_settings_from_env() -> AuthorizationSettings:
         ),
         namespace_scopes=_tag_scope_env(
             EnvironmentVariable.MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES,
+            default={},
+        ),
+        namespace_linux_groups=_tag_scope_env(
+            EnvironmentVariable.MCP_PORTAL_AUTHZ_NAMESPACE_LINUX_GROUPS,
             default={},
         ),
     )

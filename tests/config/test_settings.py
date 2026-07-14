@@ -162,11 +162,13 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
             [
                 "MCP_PORTAL_AUTH_PROVIDER=jwt",
                 "MCP_PORTAL_AUTH_REQUIRED_SCOPES=portal.read,portal.write",
+                "MCP_PORTAL_AUTH_REQUIRED_LINUX_GROUPS=portal-users,portal-auditors",
                 "MCP_PORTAL_AUTH_JWT_JWKS_URI=https://issuer.example/.well-known/jwks.json",
                 "MCP_PORTAL_AUTH_JWT_ISSUER=https://issuer.example",
                 "MCP_PORTAL_AUTH_JWT_AUDIENCE=mcp-portal",
                 "MCP_PORTAL_AUTHZ_TAG_SCOPES=admin=admin;write=portal.write",
                 "MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES=finance=finance.read;hr=hr.read hr.audit",
+                "MCP_PORTAL_AUTHZ_NAMESPACE_LINUX_GROUPS=finance=finance-users;hr=hr-users hr-auditors",
                 "MCP_PORTAL_MIDDLEWARE_ENABLED=true",
                 "MCP_PORTAL_MULTI_INSTANCE=true",
                 "MCP_PORTAL_RATE_LIMIT_PER_SECOND=7.5",
@@ -204,6 +206,7 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
 
     assert settings.auth.provider == "jwt"
     assert settings.auth.required_scopes == ("portal.read", "portal.write")
+    assert settings.auth.required_linux_groups == ("portal-users", "portal-auditors")
     assert settings.auth.jwt_jwks_uri == "https://issuer.example/.well-known/jwks.json"
     assert settings.authorization.tag_scopes == {
         "admin": ("admin",),
@@ -212,6 +215,10 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
     assert settings.authorization.namespace_scopes == {
         "finance": ("finance.read",),
         "hr": ("hr.read", "hr.audit"),
+    }
+    assert settings.authorization.namespace_linux_groups == {
+        "finance": ("finance-users",),
+        "hr": ("hr-users", "hr-auditors"),
     }
     assert settings.middleware.enabled is True
     assert settings.enterprise.multi_instance is True

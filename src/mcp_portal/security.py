@@ -22,6 +22,7 @@ class InvocationIdentity:
         tenant_id: Trusted tenant partition identifier.
         client_id: OAuth client application identifier.
         scopes: Verified authorization scopes.
+        linux_groups: Linux/NSS groups resolved for the verified subject.
         auth_method: Authentication method metadata.
     """
 
@@ -29,6 +30,7 @@ class InvocationIdentity:
     tenant_id: str | None = None
     client_id: str | None = None
     scopes: frozenset[str] = field(default_factory=frozenset)
+    linux_groups: frozenset[str] = field(default_factory=frozenset)
     auth_method: str = "anonymous"
 
 
@@ -132,13 +134,48 @@ def identity_from_token(token: AccessToken, tenant_claim: str) -> InvocationIden
     claims: dict[str, Any] = token.claims or {}
     tenant = claims.get(tenant_claim)
     subject = token.subject or claims.get("sub")
+    auth_method = str(claims.get("auth_method", claims.get("amr", "bearer")))
+    linux_groups = (
+        linux_groups_for_subject(str(subject), strip_realm=auth_method == "kerberos")
+        if subject is not None
+        else frozenset()
+    )
     return InvocationIdentity(
         subject=str(subject) if subject is not None else None,
         tenant_id=str(tenant) if tenant is not None else None,
         client_id=token.client_id,
         scopes=frozenset(token.scopes),
-        auth_method=str(claims.get("amr", "bearer")),
+        linux_groups=linux_groups,
+        auth_method=auth_method,
     )
+
+
+def linux_groups_for_subject(subject: str, *, strip_realm: bool = False) -> frozenset[str]:
+    """Resolve a verified subject's primary and supplementary Linux groups via NSS.
+
+    Unknown users, unsupported platforms, and NSS failures deliberately produce no
+    memberships.
+
+    Args:
+        subject: Authenticated local username or Kerberos principal.
+        strip_realm: Resolve the local-name portion before ``@`` for Kerberos principals.
+
+    Returns:
+        Resolved Linux group names, or an empty set when the subject cannot be resolved.
+    """
+    username = subject.partition("@")[0] if strip_realm else subject
+    if not username:
+        return frozenset()
+    try:
+        import grp
+        import os
+        import pwd
+
+        account = pwd.getpwnam(username)
+        group_ids = os.getgrouplist(username, account.pw_gid)
+        return frozenset(grp.getgrgid(group_id).gr_name for group_id in group_ids)
+    except (ImportError, KeyError, OSError):
+        return frozenset()
 
 
 def new_invocation(tool_name: str, tenant_claim: str, deadline_seconds: float) -> InvocationContext:

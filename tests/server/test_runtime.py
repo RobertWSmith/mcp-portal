@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import anyio
 import pytest
@@ -46,6 +47,7 @@ from mcp_portal.security import (
     InvocationIdentity,
     current_invocation,
     identity_from_token,
+    linux_groups_for_subject,
     reset_invocation,
     set_invocation,
 )
@@ -70,7 +72,11 @@ class DenyPolicy:
         return PolicyDecision(False, "test denial", frozenset({"blocked"}))
 
 
-def test_identity_and_context_are_tenant_bound() -> None:
+def test_identity_and_context_are_tenant_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "mcp_portal.security.linux_groups_for_subject",
+        lambda subject, **kwargs: frozenset({"portal-users"}),
+    )
     token = AccessToken(
         token="secret",
         client_id="client",
@@ -86,6 +92,34 @@ def test_identity_and_context_are_tenant_bound() -> None:
     reset_invocation(context_token)
     assert identity.tenant_id == "tenant"
     assert identity.scopes == frozenset({"read"})
+    assert identity.linux_groups == frozenset({"portal-users"})
+
+
+def test_linux_groups_include_primary_and_supplementary_memberships(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pwd",
+        SimpleNamespace(getpwnam=lambda username: SimpleNamespace(pw_gid=100)),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "grp",
+        SimpleNamespace(
+            getgrgid=lambda group_id: SimpleNamespace(
+                gr_name={100: "primary", 200: "supplementary"}[group_id]
+            )
+        ),
+    )
+    monkeypatch.setattr("os.getgrouplist", lambda username, gid: [gid, 200], raising=False)
+
+    assert linux_groups_for_subject("alice") == frozenset({"primary", "supplementary"})
+    assert linux_groups_for_subject("alice@EXAMPLE.COM", strip_realm=True) == frozenset(
+        {"primary", "supplementary"}
+    )
 
 
 @pytest.mark.asyncio
@@ -123,6 +157,59 @@ async def test_scope_policy_requires_verified_scopes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_policy_requires_global_and_namespace_linux_groups() -> None:
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(
+            provider="static",
+            static_token="token",
+            required_linux_groups=("portal-users",),
+        ),
+        authorization=AuthorizationSettings(
+            tag_scopes={},
+            namespace_linux_groups={"finance": ("finance-users",)},
+        ),
+    )
+    child = FastMCP("test")
+
+    @child.tool(meta={"namespace": "finance"})
+    def inspect() -> str:
+        """Inspect finance data."""
+        return "ok"
+
+    tool = await child.get_tool("inspect")
+    assert tool is not None
+    engine = ScopePolicyEngine(settings)
+    denied = await engine.authorize(
+        InvocationContext(
+            "r",
+            "inspect",
+            InvocationIdentity(subject="alice", linux_groups=frozenset({"portal-users"})),
+            1,
+        ),
+        tool,
+        {},
+    )
+    allowed = await engine.authorize(
+        InvocationContext(
+            "r",
+            "inspect",
+            InvocationIdentity(
+                subject="alice",
+                linux_groups=frozenset({"portal-users", "finance-users"}),
+            ),
+            1,
+        ),
+        tool,
+        {},
+    )
+
+    assert denied.allowed is False
+    assert denied.required_linux_groups == frozenset({"finance-users"})
+    assert allowed.allowed is True
+
+
+@pytest.mark.asyncio
 async def test_active_server_path_emits_sanitized_audit_events() -> None:
     audit = MemoryAuditSink()
     server = create_mcp(
@@ -154,7 +241,9 @@ async def test_active_server_path_denies_before_tool_execution() -> None:
 
 
 @pytest.mark.asyncio
-async def test_catalog_only_discloses_authorized_namespaces_and_components() -> None:
+async def test_catalog_only_discloses_authorized_namespaces_and_components(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Verify namespace policy filters discovery and direct component access."""
 
     def namespace_server(label: str):
@@ -192,6 +281,10 @@ async def test_catalog_only_discloses_authorized_namespaces_and_components() -> 
         authorization=AuthorizationSettings(
             tag_scopes={},
             namespace_scopes={"finance": ("finance.read",)},
+            namespace_linux_groups={
+                "finance": ("finance-users",),
+                "hr": ("hr-users",),
+            },
         ),
     )
     server = create_mcp(
@@ -212,6 +305,10 @@ async def test_catalog_only_discloses_authorized_namespaces_and_components() -> 
         subject="alice",
     )
     context_token = auth_context_var.set(AuthenticatedUser(access_token))
+    monkeypatch.setattr(
+        "mcp_portal.security.linux_groups_for_subject",
+        lambda subject, **kwargs: frozenset({"finance-users"}),
+    )
     try:
         tools = await server.list_tools()
         resources = await server.list_resources()

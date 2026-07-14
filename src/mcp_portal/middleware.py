@@ -175,7 +175,10 @@ class AuthorizationMiddleware(Middleware):
         )
         raise PermissionPortalError(
             "Tool invocation is not authorized.",
-            details={"required_scopes": sorted(decision.required_scopes)},
+            details={
+                "required_scopes": sorted(decision.required_scopes),
+                "required_linux_groups": sorted(decision.required_linux_groups),
+            },
         )
 
 

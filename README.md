@@ -147,7 +147,9 @@ policy can stay centralized.
 
 Namespace catalogs are filtered per verified caller. Declare code-owned baseline access with
 `required_scopes` in `NamespaceMetadata`, and apply deployment-specific access with
-`MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES`. A caller that lacks either set does not see that
+`MCP_PORTAL_AUTHZ_NAMESPACE_SCOPES`. Linux deployments can additionally require host NSS
+memberships globally with `MCP_PORTAL_AUTH_REQUIRED_LINUX_GROUPS` or per namespace with
+`MCP_PORTAL_AUTHZ_NAMESPACE_LINUX_GROUPS`. A caller that lacks any requirement does not see that
 namespace's tools, resources, templates, or prompts. Calling a hidden tool directly is still
 denied by policy, while hidden resources and prompts respond as unknown to avoid disclosing
 their existence.

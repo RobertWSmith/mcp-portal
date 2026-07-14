@@ -20,12 +20,14 @@ class PolicyDecision:
         reason: Stable human-readable decision reason.
         required_scopes: Scopes evaluated by the decision.
         obligations: Additional controls required during execution.
+        required_linux_groups: Linux groups evaluated by the decision.
     """
 
     allowed: bool
     reason: str
     required_scopes: frozenset[str] = field(default_factory=frozenset)
     obligations: tuple[str, ...] = ()
+    required_linux_groups: frozenset[str] = field(default_factory=frozenset)
 
 
 class PolicyEngine(Protocol):
@@ -122,10 +124,37 @@ class ScopePolicyEngine:
         if self.settings.enterprise.require_tenant and invocation.identity.tenant_id is None:
             return PolicyDecision(False, "verified tenant claim is required", required)
 
+        required_groups = self.required_linux_groups(tool)
+        missing_groups = required_groups - invocation.identity.linux_groups
+        if missing_groups:
+            return PolicyDecision(
+                False,
+                "required Linux groups are missing",
+                required,
+                required_linux_groups=missing_groups,
+            )
+
         missing = required - invocation.identity.scopes
         if missing:
             return PolicyDecision(False, "required scopes are missing", missing)
         return PolicyDecision(True, "scope policy satisfied", required, tuple(obligations))
+
+    def required_linux_groups(self, tool: Tool) -> frozenset[str]:
+        """Resolve portal-wide and namespace-specific Linux group requirements.
+
+        Args:
+            tool: Registered governed tool.
+
+        Returns:
+            Complete Linux group set required for execution and discovery.
+        """
+        required = frozenset(self.settings.auth.required_linux_groups)
+        namespace = (tool.meta or {}).get("namespace")
+        if namespace is None:
+            return required
+        return required | frozenset(
+            self.settings.authorization.namespace_linux_groups.get(str(namespace), ())
+        )
 
     async def authorize_catalog(
         self,

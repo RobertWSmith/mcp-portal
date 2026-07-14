@@ -121,6 +121,12 @@ class PortalFastMCP(FastMCP):
             return False
         if self.portal_settings.enterprise.require_tenant and identity.tenant_id is None:
             return False
+        required_groups = frozenset(self.portal_settings.auth.required_linux_groups)
+        required_groups |= frozenset(
+            self.portal_settings.authorization.namespace_linux_groups.get(namespace.name, ())
+        )
+        if not required_groups <= identity.linux_groups:
+            return False
         required = namespace.required_scopes | frozenset(
             self.portal_settings.authorization.namespace_scopes.get(namespace.name, ())
         )
