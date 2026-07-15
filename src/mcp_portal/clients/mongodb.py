@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp_portal.config import MongoDBCollectionName, MongoDBSettings, Settings
 from mcp_portal.errors import ConfigurationPortalError
+from mcp_portal.tenancy import IsolatedSemanticCacheProxy, TenantScope
 
 
 @dataclass(frozen=True)
@@ -142,26 +143,30 @@ class MongoDBConnectors:
             **kwargs,
         )
 
-    def semantic_cache(
+    def semantic_cache(  # noqa: PLR0913 - preserves connector override controls
         self,
         embedding: Any,
         *,
+        scope: TenantScope,
+        policy_version: str,
         database_name: str | None = None,
         collection: MongoDBCollectionName = "semantic_cache",
         index_name: str | None = None,
         **kwargs: Any,
-    ) -> Any:
-        """Create a MongoDB Atlas semantic cache.
+    ) -> IsolatedSemanticCacheProxy:
+        """Create an authorization-isolated MongoDB Atlas semantic cache.
 
         Args:
             embedding: LangChain embeddings object to use for cache lookup.
+            scope: Verified invocation scope used for backend filter metadata.
+            policy_version: Namespace-owned cache authorization policy version.
             database_name: Optional database override.
             collection: Hard-coded collection alias to use.
             index_name: Optional Atlas Vector Search index override.
             kwargs: Additional `MongoDBAtlasSemanticCache` keyword arguments.
 
         Returns:
-            A `langchain_mongodb.MongoDBAtlasSemanticCache` instance.
+            A semantic-cache proxy that enforces backend authorization filters.
         """
         self._apply_database_collection_kwargs(
             kwargs,
@@ -173,10 +178,14 @@ class MongoDBConnectors:
         else:
             kwargs.setdefault("index_name", self.settings.vector_search_index)
 
-        return self.module.MongoDBAtlasSemanticCache(
-            connection_string=self.connection_string,
-            embedding=embedding,
-            **kwargs,
+        return IsolatedSemanticCacheProxy(
+            self.module.MongoDBAtlasSemanticCache(
+                connection_string=self.connection_string,
+                embedding=embedding,
+                **kwargs,
+            ),
+            scope,
+            policy_version=policy_version,
         )
 
     def loader(

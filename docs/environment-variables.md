@@ -267,14 +267,22 @@ Install the optional connector dependency before using these helpers:
 .\.venv\Scripts\python.exe -m pip install -e ".[mongodb]"
 ```
 
-Namespaces request the helper independently from the SQLAlchemy engine:
+Namespaces request the tenant-aware façade independently from the SQLAlchemy engine:
 
 ```python
-connectors = context.clients.create("langchain_mongodb")
+connectors = context.mongodb()
 vector_store = connectors.vector_search(embedding=embeddings)
 history = connectors.chat_message_history(session_id="chat-session")
 cache = connectors.cache()
+semantic_cache = connectors.semantic_cache(
+    embedding=embeddings,
+    policy_version="example-v1",
+)
 ```
+
+Semantic caches require an authenticated subject or workload. Atlas Vector Search indexes for
+the semantic-cache collection must declare `_portal_tenant` and `_portal_authorization` as filter
+fields so the portal can enforce its mandatory backend pre-filter.
 
 ## Enterprise Control Plane Settings
 

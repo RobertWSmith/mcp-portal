@@ -9,7 +9,26 @@ import mcp_portal.clients.mongodb as mongodb_module
 from mcp_portal.clients import default_client_factories
 from mcp_portal.config import DatabaseSettings, MongoDBSettings
 from mcp_portal.errors import ConfigurationPortalError
+from mcp_portal.security import InvocationContext, InvocationIdentity
 from mcp_portal.testing import create_test_settings
+from mcp_portal.tenancy import IsolatedSemanticCacheProxy, TenantScope
+
+
+def tenant_scope() -> TenantScope:
+    """Create a deterministic verified scope for connector tests."""
+    return TenantScope.from_invocation(
+        InvocationContext(
+            "request",
+            "test_tool",
+            InvocationIdentity(
+                subject="user",
+                client_id="client",
+                tenant_id="tenant",
+                scopes=frozenset({"test.read"}),
+            ),
+            30,
+        )
+    )
 
 
 def test_langchain_mongodb_factory_is_independent_of_database_provider(monkeypatch) -> None:
@@ -162,7 +181,11 @@ def test_langchain_mongodb_connector_helpers_use_configured_defaults(monkeypatch
     )
 
     assert isinstance(connector.cache(), FakeCache)
-    assert isinstance(connector.semantic_cache(embedding="embedding"), FakeSemanticCache)
+    semantic_cache = connector.semantic_cache(
+        embedding="embedding", scope=tenant_scope(), policy_version="test-v1"
+    )
+    assert isinstance(semantic_cache, IsolatedSemanticCacheProxy)
+    assert isinstance(semantic_cache.cache, FakeSemanticCache)
     assert connector.loader() == {"connector": "loader"}
     assert connector.doc_store() == {"connector": "doc_store"}
     assert connector.agent_database() == {"connector": "agent_database"}

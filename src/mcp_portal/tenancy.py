@@ -2,16 +2,33 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
+import json
+import logging
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
+
+from langchain_core.load.dump import dumps
+from langchain_core.load.load import loads
+from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.outputs import (
+    ChatGeneration,
+    ChatGenerationChunk,
+    Generation,
+    GenerationChunk,
+)
 
 from mcp_portal.errors import PermissionPortalError, ValidationPortalError
 from mcp_portal.security import InvocationContext
 from mcp_portal.tasks import PortalTask, TaskStatus, TaskStore
 
 TENANT_FIELD = "_portal_tenant"
+AUTHORIZATION_FIELD = "_portal_authorization"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -24,6 +41,8 @@ class TenantScope:
         client_id: Verified calling client identifier.
         partition: Non-reversible stable storage partition token.
         subject_partition: Non-reversible tenant-and-subject partition token.
+        authorization_partition: Non-reversible partition for the complete verified
+            authorization context and current tool.
     """
 
     tenant_id: str | None = field(metadata={"description": "Verified external tenant identifier."})
@@ -34,6 +53,9 @@ class TenantScope:
     )
     subject_partition: str = field(
         metadata={"description": "Non-reversible tenant-and-subject partition token."}
+    )
+    authorization_partition: str = field(
+        metadata={"description": "Non-reversible authorization-context partition token."}
     )
 
     @classmethod
@@ -53,6 +75,19 @@ class TenantScope:
         if require_tenant and not identity.tenant_id:
             raise PermissionPortalError("A verified tenant claim is required.")
         tenant_seed = identity.tenant_id or "single-tenant"
+        authorization_seed = json.dumps(
+            {
+                "auth_method": identity.auth_method,
+                "client_id": identity.client_id,
+                "linux_groups": sorted(identity.linux_groups),
+                "scopes": sorted(identity.scopes),
+                "subject": identity.subject,
+                "tenant_id": tenant_seed,
+                "tool_name": invocation.tool_name,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
         return cls(
             tenant_id=identity.tenant_id,
             subject=identity.subject,
@@ -61,6 +96,7 @@ class TenantScope:
             subject_partition=_partition_token(
                 "subject", f"{tenant_seed}\0{identity.subject or identity.client_id or 'anonymous'}"
             ),
+            authorization_partition=_partition_token("authorization", authorization_seed),
         )
 
     @property
@@ -89,6 +125,23 @@ class TenantScope:
         if not normalized or len(normalized) > 512:
             raise ValidationPortalError("Tenant-scoped keys must contain 1 to 512 characters.")
         return f"{self.subject_partition if subject_scoped else self.partition}:{normalized}"
+
+    def semantic_cache_partition(self, policy_version: str) -> str:
+        """Return a cache partition bound to authorization and policy versions.
+
+        Args:
+            policy_version: Namespace-owned version changed whenever cache-relevant
+                authorization or source-data semantics change.
+
+        Returns:
+            Stable opaque semantic-cache partition.
+        """
+        normalized = policy_version.strip()
+        if not normalized or len(normalized) > 128:
+            raise ValidationPortalError(
+                "Semantic-cache policy versions must contain 1 to 128 characters."
+            )
+        return _partition_token("semantic-cache", f"{self.authorization_partition}\0{normalized}")
 
     def mongo_filter(self, query: dict[str, Any] | None = None) -> dict[str, Any]:
         """Combine a MongoDB query with the trusted tenant partition.
@@ -326,6 +379,208 @@ class TenantCacheProxy:
         return await clear_partition(self.scope.partition, **kwargs)
 
 
+class IsolatedSemanticCacheProxy:
+    """Enforce backend semantic-cache isolation for one authorization context.
+
+    Prompt prefixes are not a security boundary for similarity search. This proxy
+    writes opaque tenant and authorization partitions as metadata and injects both
+    fields into every backend vector-search and deletion predicate.
+    """
+
+    def __init__(self, cache: Any, scope: TenantScope, *, policy_version: str) -> None:
+        """Bind a semantic cache to an authenticated authorization partition.
+
+        Args:
+            cache: MongoDB Atlas semantic-cache/vector-search implementation.
+            scope: Trusted invocation scope.
+            policy_version: Namespace-owned cache authorization policy version.
+        """
+        _ = scope.owner
+        self.cache = cache
+        self.scope = scope
+        self.partition = scope.semantic_cache_partition(policy_version)
+        self.llm_field = str(getattr(cache, "LLM", "llm_string"))
+        self.return_value_field = str(getattr(cache, "RETURN_VAL", "return_val"))
+
+    def lookup(self, prompt: str, llm_string: str) -> Any:
+        """Look up a generation inside the current authorization partition.
+
+        Args:
+            prompt: Model prompt used for similarity search.
+            llm_string: Serialized model configuration key.
+
+        Returns:
+            Cached generations, or `None` for a cache miss.
+        """
+        search = self._backend_method("similarity_search_with_score")
+        response = search(prompt, 1, **self._search_kwargs(llm_string))
+        return self._response_value(response)
+
+    def update(self, prompt: str, llm_string: str, return_val: Any) -> None:
+        """Write a generation with trusted isolation metadata.
+
+        Args:
+            prompt: Model prompt to embed and store.
+            llm_string: Serialized model configuration key.
+            return_val: LangChain generations to cache.
+        """
+        add_texts = self._backend_method("add_texts")
+        add_texts([prompt], [self._metadata(llm_string, return_val)])
+
+    def clear(self, **kwargs: Any) -> Any:
+        """Delete only entries in the current authorization partition.
+
+        Args:
+            kwargs: Optional backend deletion criteria.
+
+        Returns:
+            Backend deletion result.
+        """
+        self._reject_reserved_criteria(kwargs)
+        collection = getattr(self.cache, "collection", None)
+        delete_many = getattr(collection, "delete_many", None)
+        if not callable(delete_many):
+            raise PermissionPortalError(
+                "Semantic cache backend does not support authorization-safe clearing."
+            )
+        return delete_many(self._isolation_filter(kwargs))
+
+    async def alookup(self, prompt: str, llm_string: str) -> Any:
+        """Asynchronously look up a generation in the authorization partition.
+
+        Args:
+            prompt: Model prompt used for similarity search.
+            llm_string: Serialized model configuration key.
+
+        Returns:
+            Cached generations, or `None` for a cache miss.
+        """
+        search = self._backend_method("asimilarity_search_with_score")
+        response = await search(prompt, 1, **self._search_kwargs(llm_string))
+        return self._response_value(response)
+
+    async def aupdate(self, prompt: str, llm_string: str, return_val: Any) -> None:
+        """Asynchronously write a generation with trusted isolation metadata.
+
+        Args:
+            prompt: Model prompt to embed and store.
+            llm_string: Serialized model configuration key.
+            return_val: LangChain generations to cache.
+        """
+        add_texts = self._backend_method("aadd_texts")
+        await add_texts([prompt], metadatas=[self._metadata(llm_string, return_val)])
+
+    async def aclear(self, **kwargs: Any) -> Any:
+        """Asynchronously delete entries in the authorization partition.
+
+        Args:
+            kwargs: Optional backend deletion criteria.
+
+        Returns:
+            Backend deletion result.
+        """
+        return await asyncio.to_thread(self.clear, **kwargs)
+
+    def _metadata(self, llm_string: str, return_val: Any) -> dict[str, Any]:
+        """Build cache metadata from trusted portal state.
+
+        Args:
+            llm_string: Serialized model configuration key.
+            return_val: LangChain generations to serialize.
+
+        Returns:
+            Metadata containing result and isolation fields.
+        """
+        return {
+            self.llm_field: llm_string,
+            self.return_value_field: _dumps_generations(return_val),
+            TENANT_FIELD: self.scope.partition,
+            AUTHORIZATION_FIELD: self.partition,
+        }
+
+    def _search_kwargs(self, llm_string: str) -> dict[str, Any]:
+        """Build a mandatory Atlas pre-filter and preserve score thresholds.
+
+        Args:
+            llm_string: Serialized model configuration key.
+
+        Returns:
+            Keyword arguments for the backend vector search.
+        """
+        selected: dict[str, Any] = {
+            "pre_filter": self._isolation_filter({self.llm_field: {"$eq": llm_string}})
+        }
+        threshold = getattr(self.cache, "score_threshold", None)
+        if threshold is not None:
+            selected["post_filter_pipeline"] = [{"$match": {"score": {"$gte": threshold}}}]
+        return selected
+
+    def _isolation_filter(self, criteria: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Combine caller criteria with immutable isolation filters.
+
+        Args:
+            criteria: Optional additional backend criteria.
+
+        Returns:
+            Backend predicate containing immutable portal constraints.
+        """
+        constraints: list[dict[str, Any]] = [
+            {TENANT_FIELD: {"$eq": self.scope.partition}},
+            {AUTHORIZATION_FIELD: {"$eq": self.partition}},
+        ]
+        if criteria:
+            constraints.append(dict(criteria))
+        return {"$and": constraints}
+
+    def _response_value(self, response: Any) -> Any:
+        """Deserialize a cache hit, failing closed on malformed backend data.
+
+        Args:
+            response: Backend similarity-search response.
+
+        Returns:
+            Deserialized generations, or `None` for invalid data or a miss.
+        """
+        if not response:
+            return None
+        document = response[0][0]
+        metadata = getattr(document, "metadata", {})
+        serialized = metadata.get(self.return_value_field)
+        if not isinstance(serialized, str):
+            return None
+        return _loads_generations(serialized)
+
+    def _backend_method(self, name: str) -> Any:
+        """Return a required backend capability or fail closed.
+
+        Args:
+            name: Backend method name.
+
+        Returns:
+            Callable backend method.
+        """
+        method = getattr(self.cache, name, None)
+        if not callable(method):
+            raise PermissionPortalError(
+                "Semantic cache backend cannot enforce authorization isolation.",
+                details={"missing_capability": name},
+            )
+        return method
+
+    @staticmethod
+    def _reject_reserved_criteria(criteria: dict[str, Any]) -> None:
+        """Prevent namespaces from supplying portal-owned isolation fields.
+
+        Args:
+            criteria: Namespace-provided deletion criteria.
+        """
+        reserved = {TENANT_FIELD, AUTHORIZATION_FIELD}
+        if reserved & criteria.keys():
+            raise ValidationPortalError(
+                "Semantic-cache isolation fields are reserved for the portal."
+            )
+
+
 class TenantVectorStoreProxy:
     """Constrain common vector-store writes and searches to one tenant partition."""
 
@@ -456,18 +711,25 @@ class TenantMongoDBConnectors:
         """
         return TenantCacheProxy(self.connectors.cache(**kwargs), self.scope)
 
-    def semantic_cache(self, embedding: Any, **kwargs: Any) -> TenantCacheProxy:
-        """Create a tenant-partitioned semantic cache.
+    def semantic_cache(
+        self, embedding: Any, *, policy_version: str, **kwargs: Any
+    ) -> IsolatedSemanticCacheProxy:
+        """Create an authorization-partitioned semantic cache.
 
         Args:
             embedding: LangChain embeddings implementation.
+            policy_version: Namespace-owned version changed whenever authorization
+                or source-data semantics change.
             kwargs: Connector-specific options.
 
         Returns:
-            Cache proxy that prefixes every prompt key.
+            Cache proxy that enforces backend metadata filters.
         """
-        return TenantCacheProxy(
-            self.connectors.semantic_cache(embedding=embedding, **kwargs), self.scope
+        return self.connectors.semantic_cache(
+            embedding=embedding,
+            scope=self.scope,
+            policy_version=policy_version,
+            **kwargs,
         )
 
     def vector_search(self, embedding: Any, **kwargs: Any) -> TenantVectorStoreProxy:
@@ -510,3 +772,51 @@ def _partition_token(kind: str, value: str) -> str:
     """
     digest = hashlib.sha256(f"mcp-portal:{kind}\0{value}".encode()).hexdigest()
     return f"p_{digest[:24]}"
+
+
+def _dumps_generations(generations: Any) -> str:
+    """Serialize LangChain generations without backend-private helpers.
+
+    Args:
+        generations: LangChain generations to serialize.
+
+    Returns:
+        JSON-encoded LangChain serialization payload.
+    """
+    return json.dumps([dumps(item) for item in generations])
+
+
+def _loads_generations(generations: str) -> Any:
+    """Deserialize cache data and treat invalid entries as misses.
+
+    Args:
+        generations: JSON-encoded LangChain generation payload.
+
+    Returns:
+        Deserialized generations, or `None` for malformed or disallowed data.
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="The function `loads` is in beta.*")
+            return [
+                loads(
+                    item,
+                    allowed_objects=[
+                        Generation,
+                        GenerationChunk,
+                        ChatGeneration,
+                        ChatGenerationChunk,
+                        AIMessage,
+                        AIMessageChunk,
+                    ],
+                )
+                for item in json.loads(generations)
+            ]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+
+    try:
+        return [Generation(**item) for item in json.loads(generations)]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        logger.warning("Ignoring malformed semantic-cache generation data")
+        return None

@@ -16,6 +16,9 @@ do not leak into namespace business logic.
    Implemented tenant façades provide stable non-reversible partition tokens, reserved
    MongoDB metadata and filters, SQLAlchemy bind parameters, subject-scoped chat sessions,
    cache/vector wrappers, and task methods that never accept caller-supplied ownership.
+   Semantic-cache entries additionally carry opaque tenant and authorization partitions. Every
+   similarity lookup is constrained with backend metadata filters covering the verified subject,
+   client, entitlements, authentication method, tool, and namespace-owned policy version.
    Cross-tenant administrative tools must opt in with `tenant_override` and require
    `tenant.admin`.
 3. **Outbound trust boundary** — require an audience-bound credential broker and validate

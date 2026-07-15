@@ -202,14 +202,27 @@ index name.
 Namespaces can request the lazy connector helper with:
 
 ```python
-connectors = context.clients.create("langchain_mongodb")
+connectors = context.mongodb()
 vector_store = connectors.vector_search(embedding=embeddings)
 history = connectors.chat_message_history(session_id="chat-session")
 cache = connectors.cache()
+semantic_cache = connectors.semantic_cache(
+    embedding=embeddings,
+    policy_version="example-v1",
+)
 ```
 
-The helper also exposes `cache()`, `semantic_cache()`, `loader()`, `doc_store()`, and
-`agent_database()` for the matching `langchain-mongodb` integration classes.
+The tenant-aware façade also exposes `loader()` for governed document loading. Namespace code
+should not request the raw `langchain_mongodb` client when tenant-aware storage is required.
+
+Semantic caches require an authenticated subject or workload plus a namespace-owned
+`policy_version`. Lookups and deletes use backend-enforced tenant and authorization metadata
+filters; prompt prefixes are not treated as an isolation boundary. The authorization partition
+includes the verified subject, client, scopes, Linux groups, authentication method, and current
+tool. Change `policy_version` whenever authorization rules or source-data semantics change, and
+configure the Atlas Vector Search index so `_portal_tenant` and `_portal_authorization` are
+filter fields. Missing filter-index support causes lookups to fail instead of falling back to an
+unfiltered search.
 
 FastMCP emits spans and MCP Portal emits tool, admission, downstream, usage, and estimated-cost
 metrics when an OpenTelemetry SDK is attached. Set `OTEL_SERVICE_NAME` and
