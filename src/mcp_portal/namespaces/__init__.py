@@ -13,10 +13,17 @@ from typing import Any, Literal
 
 from mcp.types import Annotations, Icon, ToolAnnotations
 
+from mcp_portal.audit import AuditDetails, AuditSink, LoggingAuditSink, audit_event
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
 from mcp_portal.credentials import CredentialBroker, RejectingCredentialBroker
-from mcp_portal.egress import EgressPolicy
+from mcp_portal.egress import (
+    ApprovedEgress,
+    EgressPolicy,
+    EgressRequest,
+    StructuredPayloadInspector,
+)
+from mcp_portal.errors import PermissionPortalError
 from mcp_portal.observability import create_telemetry_recorder
 from mcp_portal.redaction import Redactor
 from mcp_portal.security import InvocationContext, current_invocation
@@ -48,19 +55,23 @@ class NamespaceContext:
 
     Attributes:
         name: Namespace prefix used when mounting provider components.
+        data_classification: Namespace-owned lower bound for outbound data.
         settings: Shared runtime settings.
         logger: Logger scoped to this namespace.
         redactor: Redactor used before exposing diagnostics.
         clients: Registry of external client factories.
         clock: Time provider used by tools and tests.
+        audit: Append-only audit destination.
     """
 
     name: str
+    data_classification: str
     settings: Settings
     logger: logging.Logger
     redactor: Redactor
     clients: ClientFactories
     clock: Clock
+    audit: AuditSink
     egress: EgressPolicy
     credentials: CredentialBroker
     tasks: TaskStore
@@ -133,7 +144,10 @@ class NamespaceContext:
         )
 
     def outbound_url(self, url: str) -> str:
-        """Validate an outbound URL against the namespace egress policy.
+        """Validate a payload-free URL against destination policy.
+
+        Data-bearing operations must use :meth:`downstream` so payload and
+        credential policy cannot be bypassed accidentally.
 
         Args:
             url: Candidate HTTPS destination.
@@ -143,39 +157,80 @@ class NamespaceContext:
         """
         return self.egress.validate_url(url)
 
-    async def downstream_credential(self, audience: str) -> str:
-        """Request an audience-bound credential for the verified caller.
-
-        Args:
-            audience: Exact downstream HTTPS resource URI.
-
-        Returns:
-            Broker-issued downstream credential.
-        """
-        return await self.credentials.credential_for(
-            self.invocation().identity, self.outbound_url(audience)
-        )
-
     async def downstream(
         self,
         client: str,
-        operation: Callable[[], Any | Awaitable[Any]],
+        request: EgressRequest,
+        operation: Callable[[ApprovedEgress], Any | Awaitable[Any]],
         *,
         timeout_seconds: float | None = None,
     ) -> Any:
-        """Execute a downstream call with timeout and circuit-breaker protection.
+        """Authorize and execute one data-aware downstream call.
 
         Args:
             client: Registered dependency name used for readiness and breaker state.
-            operation: Zero-argument sync or async downstream operation.
+            request: Destination, payload, purpose, and optional credential audience.
+            operation: Callback receiving only sanitized approved inputs.
             timeout_seconds: Optional deadline override for this operation.
 
         Returns:
             The downstream operation result.
         """
+        invocation = self.invocation()
+        decision = self.egress.evaluate(
+            invocation,
+            request,
+            minimum_classification=self.data_classification,
+        )
+        if self.settings.enterprise.audit_enabled:
+            await self.audit.append(
+                audit_event(
+                    "egress_authorization",
+                    invocation,
+                    {},
+                    AuditDetails(
+                        allowed=decision.allowed,
+                        reason=decision.reason,
+                        destination_host=decision.host,
+                        egress_method=decision.method,
+                        data_classification=decision.data_classification,
+                        detected_classification=decision.detected_classification,
+                        destination_max_classification=(decision.destination_max_classification),
+                        payload_digest=decision.payload_digest,
+                        findings=decision.findings,
+                        purpose=decision.purpose,
+                    ),
+                )
+            )
+        if not decision.allowed:
+            raise PermissionPortalError(
+                "Outbound request is not authorized.",
+                namespace=self.name,
+                details={
+                    "host": decision.host,
+                    "reason": decision.reason,
+                    "data_classification": decision.data_classification,
+                    "destination_max_classification": (decision.destination_max_classification),
+                    "findings": list(decision.findings),
+                },
+            )
+        credential = (
+            await self.credentials.credential_for(invocation.identity, decision.credential_audience)
+            if decision.credential_audience is not None
+            else None
+        )
+        approved = ApprovedEgress(
+            destination=decision.destination,
+            method=decision.method,
+            purpose=decision.purpose,
+            data_classification=decision.data_classification,
+            payload_digest=decision.payload_digest,
+            payload=decision.payload,
+            credential=credential,
+        )
         return await self.clients.execute(
             client,
-            operation,
+            lambda: operation(approved),
             timeout_seconds=timeout_seconds,
         )
 
@@ -698,9 +753,8 @@ def build_namespace_runtimes(
             settings.mongodb.connection_string,
         )
     )
-    shared_egress = dependencies.egress_policy or EgressPolicy(
-        allowed_hosts=frozenset(host.lower() for host in settings.enterprise.egress_allowed_hosts)
-    )
+    shared_audit = dependencies.audit_sink or LoggingAuditSink()
+    shared_egress = dependencies.egress_policy or _default_egress_policy(settings, shared_redactor)
     shared_credentials = dependencies.credential_broker or RejectingCredentialBroker()
     shared_tasks = dependencies.task_store or MemoryTaskStore(
         max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
@@ -712,6 +766,7 @@ def build_namespace_runtimes(
         clients=shared_clients,
         redactor=shared_redactor,
         clock=dependencies.clock,
+        audit_sink=shared_audit,
         egress_policy=shared_egress,
         credential_broker=shared_credentials,
         task_store=shared_tasks,
@@ -748,12 +803,15 @@ def build_namespace_context(
     """
     return NamespaceContext(
         name=namespace.name,
+        data_classification=namespace.data_classification,
         settings=settings,
         logger=logging.getLogger(f"mcp_portal.namespaces.{namespace.name}"),
         redactor=dependencies.redactor or Redactor(),
         clients=dependencies.clients or default_client_factories(settings),
         clock=dependencies.clock or utc_now,
-        egress=dependencies.egress_policy or EgressPolicy(),
+        audit=dependencies.audit_sink or LoggingAuditSink(),
+        egress=dependencies.egress_policy
+        or _default_egress_policy(settings, dependencies.redactor or Redactor()),
         credentials=dependencies.credential_broker or RejectingCredentialBroker(),
         tasks=dependencies.task_store
         or MemoryTaskStore(
@@ -761,6 +819,24 @@ def build_namespace_context(
             max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
         ),
         telemetry=dependencies.telemetry or create_telemetry_recorder(settings),
+    )
+
+
+def _default_egress_policy(settings: Settings, redactor: Redactor) -> EgressPolicy:
+    """Build the configured data-aware egress policy.
+
+    Args:
+        settings: Deployment settings containing destination rules.
+        redactor: Redactor containing deployment-known literal secrets.
+
+    Returns:
+        Egress policy with structured payload inspection.
+    """
+    return EgressPolicy(
+        allowed_hosts=frozenset(settings.enterprise.egress_allowed_hosts),
+        destination_classifications=(settings.enterprise.egress_destination_classifications),
+        sensitive_field_action=settings.enterprise.egress_sensitive_field_action,
+        inspector=StructuredPayloadInspector(redactor),
     )
 
 

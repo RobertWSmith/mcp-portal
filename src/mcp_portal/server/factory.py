@@ -11,11 +11,12 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from mcp_portal.audit import LoggingAuditSink
 from mcp_portal.auth import create_auth_provider
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
 from mcp_portal.credentials import RejectingCredentialBroker
-from mcp_portal.egress import EgressPolicy
+from mcp_portal.egress import EgressPolicy, StructuredPayloadInspector
 from mcp_portal.errors import ConfigurationPortalError
 from mcp_portal.middleware import create_governance_middleware
 from mcp_portal.namespaces import Namespace, build_namespace_runtimes, iter_namespaces
@@ -177,11 +178,13 @@ def _resolve_portal_services(
         clients=clients,
         telemetry=telemetry,
         redactor=redactor,
+        audit_sink=services.audit_sink or LoggingAuditSink(),
         egress_policy=services.egress_policy
         or EgressPolicy(
-            allowed_hosts=frozenset(
-                host.lower() for host in settings.enterprise.egress_allowed_hosts
-            )
+            allowed_hosts=frozenset(settings.enterprise.egress_allowed_hosts),
+            destination_classifications=(settings.enterprise.egress_destination_classifications),
+            sensitive_field_action=settings.enterprise.egress_sensitive_field_action,
+            inspector=StructuredPayloadInspector(redactor),
         ),
         credential_broker=services.credential_broker or RejectingCredentialBroker(),
         task_store=services.task_store

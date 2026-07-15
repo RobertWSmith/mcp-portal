@@ -12,7 +12,7 @@ from langchain_core.outputs import Generation
 
 from mcp_portal.clients import ClientFactories
 from mcp_portal.config import AuthSettings, EnterpriseSettings
-from mcp_portal.egress import EgressPolicy
+from mcp_portal.egress import EgressPolicy, EgressRequest
 from mcp_portal.errors import PermissionPortalError, ValidationPortalError
 from mcp_portal.errors import ConfigurationPortalError
 from mcp_portal.policy import ScopePolicyEngine
@@ -442,13 +442,21 @@ async def test_namespace_context_exposes_only_invocation_bound_facades() -> None
     connectors = FakeConnectors()
     context = create_namespace_test_context(
         dependencies=NamespaceDependencies(
-            clients=ClientFactories({"langchain_mongodb": lambda: connectors})
+            clients=ClientFactories(
+                {
+                    "langchain_mongodb": lambda: connectors,
+                    "records_api": object,
+                }
+            )
         )
     )
     context = replace(
         context,
         credentials=FakeBroker(),
-        egress=EgressPolicy(frozenset({"api.example.com"})),
+        egress=EgressPolicy(
+            frozenset({"api.example.com"}),
+            destination_classifications={"api.example.com": "internal"},
+        ),
     )
 
     with invocation_scope(invocation()):
@@ -457,8 +465,18 @@ async def test_namespace_context_exposes_only_invocation_bound_facades() -> None
         assert isinstance(context.tenant_sql(), TenantSQLExecutor)
         assert isinstance(context.mongodb(), TenantMongoDBConnectors)
         assert context.outbound_url("https://api.example.com") == "https://api.example.com"
-        credential = await context.downstream_credential("https://api.example.com")
-    assert credential == "credential:tenant-a:https://api.example.com"
+        approved = await context.downstream(
+            "records_api",
+            EgressRequest(
+                destination="https://api.example.com/records",
+                purpose="records.lookup",
+                payload={"record_id": 7},
+                credential_audience="https://api.example.com",
+            ),
+            lambda request: request,
+        )
+    assert approved.payload == {"record_id": 7}
+    assert approved.credential == "credential:tenant-a:https://api.example.com"
 
 
 @pytest.mark.asyncio

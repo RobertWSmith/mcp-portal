@@ -303,6 +303,8 @@ fields so the portal can enforce its mandatory backend pre-filter.
 | `MCP_PORTAL_TASK_MAX_TTL_SECONDS` | `3600` | No | Maximum task retention duration accepted by the task store. |
 | `MCP_PORTAL_TASK_MAX_CONCURRENT_PER_SUBJECT` | `10` | No | Maximum working tasks owned by one authenticated subject. |
 | `MCP_PORTAL_EGRESS_ALLOWED_HOSTS` | unset | Recommended | Exact comma- or space-separated HTTPS hostname allowlist exposed to namespaces. |
+| `MCP_PORTAL_EGRESS_DESTINATION_CLASSIFICATIONS` | unset | Required for non-public egress | Semicolon-separated maximum data classification per approved host, for example `records.example.com=confidential;hooks.example.com=public`. Approved hosts without a rule accept only `public` data. |
+| `MCP_PORTAL_EGRESS_SENSITIVE_FIELD_ACTION` | `block` | No | `block` denies payloads containing detected credentials, personal identifiers, binary data, or opaque objects. `redact` removes detected values before destination classification is evaluated. |
 | `MCP_PORTAL_NAMESPACE_ALLOWLIST` | unset | Recommended | Namespace names admitted into this deployment. Empty retains automatic discovery behavior. |
 
 Tools may declare `timeout_seconds` and `max_concurrency` in their portal `_meta`; the
@@ -310,11 +312,29 @@ fully-qualified environment maps take precedence. Namespace network and database
 should use the shared downstream boundary so timeouts, breaker state, and readiness agree:
 
 ```python
+from mcp_portal.egress import EgressRequest
+
 result = await context.downstream(
     "records_api",
-    lambda: records_client.fetch(record_id),
+    EgressRequest(
+        destination="https://records.example.com/v1/lookup",
+        purpose="records.lookup",
+        payload={"record_id": record_id},
+        credential_audience="https://records.example.com",
+    ),
+    lambda approved: records_client.fetch(
+        approved.destination,
+        json=approved.payload,
+        bearer_token=approved.credential,
+        follow_redirects=False,
+    ),
 )
 ```
+
+The callback receives only the policy-approved URL, sanitized payload, and audience-bound
+credential. Policy is evaluated and audited before credential exchange. Disable redirects; when a
+redirect is required, submit its target as a new `context.downstream` request. An initial allow
+decision does not authorize another hop.
 
 Register a dependency probe when adding a custom client factory. Probes run concurrently and
 their error details are reduced to safe exception types in `/readyz` responses.

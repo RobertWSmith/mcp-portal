@@ -171,6 +171,9 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
                 "MCP_PORTAL_AUTHZ_NAMESPACE_LINUX_GROUPS=finance=finance-users;hr=hr-users hr-auditors",
                 "MCP_PORTAL_MIDDLEWARE_ENABLED=true",
                 "MCP_PORTAL_MULTI_INSTANCE=true",
+                "MCP_PORTAL_EGRESS_ALLOWED_HOSTS=records.example.com,hooks.example.com",
+                "MCP_PORTAL_EGRESS_DESTINATION_CLASSIFICATIONS=records.example.com=confidential;hooks.example.com=public",
+                "MCP_PORTAL_EGRESS_SENSITIVE_FIELD_ACTION=redact",
                 "MCP_PORTAL_RATE_LIMIT_PER_SECOND=7.5",
                 "MCP_PORTAL_RATE_LIMIT_BURST=11",
                 "MCP_PORTAL_RESPONSE_MAX_BYTES=2048",
@@ -222,6 +225,15 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
     }
     assert settings.middleware.enabled is True
     assert settings.enterprise.multi_instance is True
+    assert settings.enterprise.egress_allowed_hosts == (
+        "records.example.com",
+        "hooks.example.com",
+    )
+    assert settings.enterprise.egress_destination_classifications == {
+        "records.example.com": "confidential",
+        "hooks.example.com": "public",
+    }
+    assert settings.enterprise.egress_sensitive_field_action == "redact"
     assert settings.middleware.rate_limit_per_second == 7.5
     assert settings.middleware.rate_limit_burst == 11
     assert settings.middleware.response_max_bytes == 2048

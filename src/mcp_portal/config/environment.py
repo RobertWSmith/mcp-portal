@@ -238,6 +238,12 @@ def _enterprise_settings_from_env() -> EnterpriseSettings:
             EnvironmentVariable.MCP_PORTAL_TASK_MAX_CONCURRENT_PER_SUBJECT, default=10
         ),
         egress_allowed_hosts=_csv_env(EnvironmentVariable.MCP_PORTAL_EGRESS_ALLOWED_HOSTS),
+        egress_destination_classifications=_egress_classification_env(
+            EnvironmentVariable.MCP_PORTAL_EGRESS_DESTINATION_CLASSIFICATIONS
+        ),
+        egress_sensitive_field_action=_egress_action_env(
+            EnvironmentVariable.MCP_PORTAL_EGRESS_SENSITIVE_FIELD_ACTION
+        ),
         namespace_allowlist=_csv_env(EnvironmentVariable.MCP_PORTAL_NAMESPACE_ALLOWLIST),
     )
 
@@ -564,3 +570,42 @@ def _tag_scope_env(
         rules[tag] = scopes
 
     return rules or dict(default)
+
+
+def _egress_classification_env(name: str) -> dict[str, str]:
+    """Read semicolon-separated hostname classification ceilings.
+
+    Args:
+        name: Environment variable name to read.
+
+    Returns:
+        Normalized hostname-to-classification mapping, or an empty mapping when invalid.
+    """
+    value = _optional_env(name)
+    if value is None:
+        return {}
+    allowed = {"public", "internal", "confidential", "restricted"}
+    selected: dict[str, str] = {}
+    for raw_entry in value.split(";"):
+        entry = raw_entry.strip()
+        if not entry or "=" not in entry:
+            return {}
+        host, classification = (part.strip().lower() for part in entry.split("=", 1))
+        host = host.rstrip(".")
+        if not host or classification not in allowed:
+            return {}
+        selected[host] = classification
+    return selected
+
+
+def _egress_action_env(name: str) -> str:
+    """Read the sensitive-field enforcement action.
+
+    Args:
+        name: Environment variable name to read.
+
+    Returns:
+        `block` or `redact`, defaulting safely to `block`.
+    """
+    selected = (_optional_env(name) or "block").lower()
+    return selected if selected in {"block", "redact"} else "block"

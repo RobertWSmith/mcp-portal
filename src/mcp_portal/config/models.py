@@ -414,6 +414,8 @@ class EnterpriseSettings:
         task_max_ttl_seconds: Maximum task result retention period.
         task_max_concurrent_per_subject: Maximum working tasks for one owner.
         egress_allowed_hosts: Approved outbound DNS hostnames.
+        egress_destination_classifications: Maximum data classification per host.
+        egress_sensitive_field_action: Whether detected values block or are redacted.
     """
 
     require_auth: bool = False
@@ -431,6 +433,8 @@ class EnterpriseSettings:
     task_max_ttl_seconds: int = 3600
     task_max_concurrent_per_subject: int = 10
     egress_allowed_hosts: tuple[str, ...] = ()
+    egress_destination_classifications: dict[str, str] = field(default_factory=dict)
+    egress_sensitive_field_action: str = "block"
     namespace_allowlist: tuple[str, ...] = ()
 
     def public_snapshot(self) -> dict[str, object]:
@@ -455,6 +459,16 @@ class EnterpriseSettings:
             "task_max_ttl_seconds": self.task_max_ttl_seconds,
             "task_max_concurrent_per_subject": self.task_max_concurrent_per_subject,
             "egress_allowlist_configured": bool(self.egress_allowed_hosts),
+            "egress_destination_classifications_configured": bool(
+                self.egress_destination_classifications
+            ),
+            "egress_destination_classification_counts": {
+                classification: tuple(self.egress_destination_classifications.values()).count(
+                    classification
+                )
+                for classification in ("public", "internal", "confidential", "restricted")
+            },
+            "egress_sensitive_field_action": self.egress_sensitive_field_action,
             "namespace_allowlist": list(self.namespace_allowlist),
         }
 

@@ -30,6 +30,14 @@ class AuditEvent:
         reason: Optional policy reason.
         outcome: Optional completion outcome.
         duration_ms: Optional execution duration.
+        destination_host: Optional normalized outbound hostname.
+        egress_method: Optional normalized outbound HTTP method.
+        data_classification: Optional classification of released outbound data.
+        detected_classification: Optional classification detected before redaction.
+        destination_max_classification: Optional destination classification ceiling.
+        payload_digest: Optional digest of the original outbound payload.
+        findings: Optional stable DLP finding labels without sensitive values.
+        purpose: Optional low-cardinality outbound purpose.
     """
 
     occurred_at: str = field(metadata={"description": "UTC event timestamp."})
@@ -54,6 +62,30 @@ class AuditEvent:
     duration_ms: float | None = field(
         default=None, metadata={"description": "Optional execution duration."}
     )
+    destination_host: str | None = field(
+        default=None, metadata={"description": "Optional normalized outbound hostname."}
+    )
+    egress_method: str | None = field(
+        default=None, metadata={"description": "Optional outbound HTTP method."}
+    )
+    data_classification: str | None = field(
+        default=None, metadata={"description": "Optional outbound data classification."}
+    )
+    detected_classification: str | None = field(
+        default=None, metadata={"description": "Optional detected data classification."}
+    )
+    destination_max_classification: str | None = field(
+        default=None, metadata={"description": "Optional destination classification ceiling."}
+    )
+    payload_digest: str | None = field(
+        default=None, metadata={"description": "Optional outbound payload digest."}
+    )
+    findings: tuple[str, ...] = field(
+        default=(), metadata={"description": "Stable outbound DLP finding labels."}
+    )
+    purpose: str | None = field(
+        default=None, metadata={"description": "Optional low-cardinality outbound purpose."}
+    )
 
 
 @dataclass(frozen=True)
@@ -62,12 +94,28 @@ class AuditDetails:
 
     Attributes:
         decision: Optional authorization decision.
+        allowed: Optional direct policy result when no `PolicyDecision` is used.
+        reason: Optional direct policy decision reason.
         outcome: Optional completion outcome.
         duration_ms: Optional execution duration.
+        destination_host: Optional normalized outbound hostname.
+        egress_method: Optional outbound HTTP method.
+        data_classification: Optional classification of released outbound data.
+        detected_classification: Optional classification detected before redaction.
+        destination_max_classification: Optional destination classification ceiling.
+        payload_digest: Optional outbound payload digest.
+        findings: Stable DLP finding labels without sensitive values.
+        purpose: Optional low-cardinality outbound purpose.
     """
 
     decision: PolicyDecision | None = field(
         default=None, metadata={"description": "Optional authorization decision."}
+    )
+    allowed: bool | None = field(
+        default=None, metadata={"description": "Optional direct policy result."}
+    )
+    reason: str | None = field(
+        default=None, metadata={"description": "Optional direct policy reason."}
     )
     outcome: str | None = field(
         default=None, metadata={"description": "Optional completion outcome."}
@@ -75,6 +123,14 @@ class AuditDetails:
     duration_ms: float | None = field(
         default=None, metadata={"description": "Optional execution duration."}
     )
+    destination_host: str | None = None
+    egress_method: str | None = None
+    data_classification: str | None = None
+    detected_classification: str | None = None
+    destination_max_classification: str | None = None
+    payload_digest: str | None = None
+    findings: tuple[str, ...] = ()
+    purpose: str | None = None
 
 
 class AuditSink(Protocol):
@@ -167,8 +223,16 @@ def audit_event(
         tenant_id=identity.tenant_id,
         client_id=identity.client_id,
         argument_digest=digest_arguments(arguments),
-        allowed=details.decision.allowed if details.decision else None,
-        reason=details.decision.reason if details.decision else None,
+        allowed=details.decision.allowed if details.decision else details.allowed,
+        reason=details.decision.reason if details.decision else details.reason,
         outcome=details.outcome,
         duration_ms=details.duration_ms,
+        destination_host=details.destination_host,
+        egress_method=details.egress_method,
+        data_classification=details.data_classification,
+        detected_classification=details.detected_classification,
+        destination_max_classification=details.destination_max_classification,
+        payload_digest=details.payload_digest,
+        findings=details.findings,
+        purpose=details.purpose,
     )

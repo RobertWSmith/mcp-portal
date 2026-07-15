@@ -30,6 +30,8 @@ accepted values, loading behavior, and production requirements.
 - `MCP_PORTAL_HTTP_PATH` and `MCP_PORTAL_HEALTH_PATH`
 - `MCP_PORTAL_DATABASE_PROVIDER`, `MCP_PORTAL_DATABASE_SQLALCHEMY_URL`, and `MCP_PORTAL_ORACLE_*`
 - `MCP_PORTAL_MONGODB_*` for LangChain MongoDB connectors
+- `MCP_PORTAL_EGRESS_ALLOWED_HOSTS`, `MCP_PORTAL_EGRESS_DESTINATION_CLASSIFICATIONS`, and
+  `MCP_PORTAL_EGRESS_SENSITIVE_FIELD_ACTION` for data-aware outbound policy
 - `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, and `MCP_PORTAL_*` telemetry controls
 
 The health namespace exposes only non-secret configuration metadata. It never returns
@@ -103,11 +105,12 @@ server starts. The active tool-call path enforces tag scopes, per-identity quota
 concurrency, deadlines, response limits, standard safety annotations, approval requirements,
 and sanitized audit events.
 
-Enterprise namespaces receive trusted invocation identity/tenant context, an outbound HTTPS
-policy, a downstream credential-broker boundary, and an authorization-bound task store. Tool
+Enterprise namespaces receive trusted invocation identity/tenant context, a data-aware outbound
+HTTPS policy, a downstream credential-broker boundary, and an authorization-bound task store. Tool
 deadlines and concurrency can be overridden by fully-qualified tool name. Namespace code can
-run external work through `context.downstream(...)` for bounded calls, closed/open/half-open
-circuit breaking, and dependency-aware readiness.
+run external work through `context.downstream(...)` for destination classification, structured
+payload inspection, pre-credential audit, bounded calls, closed/open/half-open circuit breaking,
+and dependency-aware readiness.
 See [the enterprise roadmap](docs/enterprise-roadmap.md) for production adapters and rollout
 phases.
 

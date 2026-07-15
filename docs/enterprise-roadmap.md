@@ -24,6 +24,12 @@ do not leak into namespace business logic.
 3. **Outbound trust boundary** — require an audience-bound credential broker and validate
    outbound HTTPS destinations against an explicit hostname policy. Inbound MCP tokens are
    never exposed through the namespace context.
+
+   Implemented data-aware egress binds every downstream request to verified actor/client/tool
+   context, the namespace classification floor, a stable purpose, HTTP method, destination
+   ceiling, structured payload inspection, and a same-origin credential audience. Sensitive
+   fields block by default or are removed before the approved callback receives the payload;
+   sanitized decisions are audited before credential exchange.
 4. **Bounded execution** — apply per-tenant/subject/tool quota keys, concurrency admission,
    deadlines, and response-size limits. Replace the memory quota backend with Redis or an
    API-gateway adapter for horizontally scaled deployments.
