@@ -174,6 +174,7 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
                 "MCP_PORTAL_EGRESS_ALLOWED_HOSTS=records.example.com,hooks.example.com",
                 "MCP_PORTAL_EGRESS_DESTINATION_CLASSIFICATIONS=records.example.com=confidential;hooks.example.com=public",
                 "MCP_PORTAL_EGRESS_SENSITIVE_FIELD_ACTION=redact",
+                "MCP_PORTAL_EXECUTION_REMOTE_CLASSIFICATIONS=confidential,restricted",
                 "MCP_PORTAL_RATE_LIMIT_PER_SECOND=7.5",
                 "MCP_PORTAL_RATE_LIMIT_BURST=11",
                 "MCP_PORTAL_RESPONSE_MAX_BYTES=2048",
@@ -234,6 +235,10 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
         "hooks.example.com": "public",
     }
     assert settings.enterprise.egress_sensitive_field_action == "redact"
+    assert settings.enterprise.execution_remote_classifications == (
+        "confidential",
+        "restricted",
+    )
     assert settings.middleware.rate_limit_per_second == 7.5
     assert settings.middleware.rate_limit_burst == 11
     assert settings.middleware.response_max_bytes == 2048
@@ -263,6 +268,35 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
     assert settings.observability.include_tenant_metrics is True
     assert settings.observability.cost_currency == "EUR"
     assert settings.observability.pricing_version == "contract-2026-07"
+
+
+def test_settings_load_oauth_claim_mappings(tmp_path: Path, monkeypatch) -> None:
+    """Verify OAuth discovery and provider-specific claim mappings load from the environment."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "MCP_PORTAL_AUTH_PROVIDER=oauth",
+                "MCP_PORTAL_AUTH_JWT_CLOCK_SKEW_SECONDS=30",
+                "MCP_PORTAL_AUTH_JWT_SUBJECT_CLAIM=oid",
+                "MCP_PORTAL_AUTH_JWT_CLIENT_ID_CLAIMS=azp,appid",
+                "MCP_PORTAL_AUTH_JWT_ROLES_CLAIM=app_roles",
+                "MCP_PORTAL_AUTH_AUTHORIZATION_SERVER_URL=https://issuer.example",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for name in PORTAL_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings.from_env(env_file, override=True)
+
+    assert settings.auth.provider == "oauth"
+    assert settings.auth.jwt_clock_skew_seconds == 30
+    assert settings.auth.jwt_subject_claim == "oid"
+    assert settings.auth.jwt_client_id_claims == ("azp", "appid")
+    assert settings.auth.jwt_roles_claim == "app_roles"
+    assert settings.auth.authorization_server_url == "https://issuer.example"
 
 
 def test_settings_load_combined_ldap_and_kerberos_auth(tmp_path: Path) -> None:
@@ -350,6 +384,8 @@ def test_settings_defaults_and_placeholder_key(monkeypatch) -> None:
     assert snapshot["authorization"]["tag_scopes"]["admin"] == ["admin"]
     assert snapshot["authorization"]["namespace_scopes"] == {}
     assert snapshot["middleware"]["enabled"] is False
+    assert snapshot["enterprise"]["execution_cells_enabled"] is True
+    assert snapshot["enterprise"]["execution_remote_classifications"] == ["restricted"]
     assert snapshot["http"]["path"] == "/mcp"
     assert snapshot["namespace_discovery"] == {"strict": False}
     assert snapshot["database"]["oracle_preferred"] is True

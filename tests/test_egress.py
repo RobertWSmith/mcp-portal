@@ -17,8 +17,8 @@ from mcp_portal.egress import (
 from mcp_portal.errors import PermissionPortalError, ValidationPortalError
 from mcp_portal.namespaces import NamespaceDependencies
 from mcp_portal.redaction import Redactor
-from mcp_portal.security import InvocationContext, InvocationIdentity, invocation_scope
-from mcp_portal.testing import create_namespace_test_context
+from mcp_portal.security import InvocationContext, InvocationIdentity
+from mcp_portal.testing import create_namespace_test_context, namespace_execution_scope
 
 
 def invocation(
@@ -265,7 +265,7 @@ async def test_namespace_downstream_audits_before_credentials_and_releases_sanit
         payload={"email": "alice@example.com", "record_id": 7},
         credential_audience="https://api.example.com",
     )
-    with invocation_scope(invocation()):
+    with namespace_execution_scope(context, invocation()):
         result = await context.downstream("records_api", request, operation)
 
     assert result == {"email": "[REDACTED]", "record_id": 7}
@@ -311,7 +311,7 @@ async def test_namespace_downstream_denial_prevents_credentials_and_execution() 
         credential_audience="https://public.example.com",
     )
     with (
-        invocation_scope(invocation()),
+        namespace_execution_scope(context, invocation()),
         pytest.raises(PermissionPortalError, match="not authorized"),
     ):
         await context.downstream("records_api", request, operation)

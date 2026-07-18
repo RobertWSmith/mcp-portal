@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 
 from fastmcp import Client
@@ -16,6 +18,7 @@ from mcp_portal.config import (
     OpenAISettings,
     Settings,
 )
+from mcp_portal.execution import ExecutionCell, ExecutionCellManager, ExecutionIsolation
 from mcp_portal.namespaces import (
     Namespace,
     NamespaceContext,
@@ -24,6 +27,7 @@ from mcp_portal.namespaces import (
     build_namespace_context,
 )
 from mcp_portal.redaction import Redactor
+from mcp_portal.security import InvocationContext, invocation_scope
 
 
 @dataclass(frozen=True)
@@ -143,6 +147,41 @@ def create_namespace_test_context(
             clock=dependencies.clock,
         ),
     )
+
+
+@contextmanager
+def namespace_execution_scope(
+    context: NamespaceContext,
+    invocation: InvocationContext,
+    *,
+    isolation: ExecutionIsolation = "in_process",
+) -> Iterator[ExecutionCell]:
+    """Activate a production-equivalent execution cell for a namespace unit test.
+
+    Args:
+        context: Namespace context whose capabilities will be exercised.
+        invocation: Trusted test invocation to bind to the cell.
+        isolation: Simulated provider isolation boundary.
+
+    Yields:
+        Active execution cell.
+
+    Returns:
+        Context manager that restores invocation and cell state after the test.
+    """
+    manager = ExecutionCellManager(
+        frozenset(context.settings.enterprise.execution_remote_classifications)
+    )
+    with (
+        invocation_scope(invocation),
+        manager.open(
+            invocation,
+            namespace=context.name,
+            data_classification=context.data_classification,
+            isolation=isolation,
+        ) as cell,
+    ):
+        yield cell
 
 
 def create_namespace_test_client(

@@ -220,8 +220,13 @@ async def test_active_server_path_emits_sanitized_audit_events() -> None:
     result = await server.call_tool("health_ping", {})
 
     assert result
-    assert [event.event for event in audit.events] == ["authorization", "completion"]
-    assert audit.events[1].outcome == "succeeded"
+    assert [event.event for event in audit.events] == [
+        "authorization",
+        "execution_cell_started",
+        "completion",
+    ]
+    assert audit.events[2].outcome == "succeeded"
+    assert audit.events[1].execution_cell_id == audit.events[2].execution_cell_id
     assert audit.events[0].argument_digest == digest_arguments({})
 
 
@@ -602,16 +607,23 @@ def test_production_validation_rejects_unsafe_oauth_posture() -> None:
         settings.validate_production()
     assert "JWT issuer is required" in str(error.value.details)
 
-    safe = replace(
+    oauth = replace(
         settings,
-        auth=replace(
-            settings.auth,
+        auth=AuthSettings(
+            provider="oauth",
+            jwt_jwks_uri="https://issuer.example/.well-known/jwks.json",
             jwt_issuer="https://issuer.example",
             jwt_audience="https://portal.example/mcp",
+            authorization_server_url="https://issuer.example",
             resource_server_url="https://portal.example/mcp",
         ),
     )
-    safe.validate_production()
+    oauth.validate_production()
+
+    unsafe = replace(oauth, auth=replace(oauth.auth, jwt_algorithm="HS256"))
+    with pytest.raises(ConfigurationPortalError) as error:
+        unsafe.validate_production()
+    assert "symmetric JWT algorithms" in str(error.value.details)
 
 
 @pytest.mark.asyncio
@@ -669,7 +681,13 @@ async def test_remote_namespace_provider_preserves_namespaced_contract() -> None
     """Verify an isolated MCP server can be mounted behind a governed namespace."""
     remote = FastMCP("remote-records")
 
-    @remote.tool(meta={"tags": ["readonly"]})
+    @remote.tool(
+        meta={
+            "tags": ["readonly"],
+            "namespace": "spoofed",
+            "data_classification": "public",
+        }
+    )
     def lookup(record_id: str) -> str:
         """Return one remote record identifier."""
         return f"remote:{record_id}"
@@ -686,6 +704,7 @@ async def test_remote_namespace_provider_preserves_namespaced_contract() -> None
         _ = context
         return RemoteNamespaceProvider.from_transport(remote, cache_ttl_seconds=0)
 
+    audit = MemoryAuditSink()
     server = create_mcp(
         create_test_settings(),
         namespaces=[
@@ -695,9 +714,11 @@ async def test_remote_namespace_provider_preserves_namespaced_contract() -> None
                 description="Remote records.",
                 tags=frozenset({"readonly"}),
                 owner="records-team",
+                data_classification="restricted",
                 timeout_seconds=5,
             )
         ],
+        services=PortalServices(audit_sink=audit),
     )
 
     tools = await server.list_tools()
@@ -705,6 +726,10 @@ async def test_remote_namespace_provider_preserves_namespaced_contract() -> None
 
     assert [tool.name for tool in tools] == ["records_lookup"]
     assert result.structured_content == {"result": "remote:42"}
+    cell_event = next(event for event in audit.events if event.event == "execution_cell_started")
+    assert cell_event.execution_cell_namespace == "records"
+    assert cell_event.execution_isolation == "remote"
+    assert cell_event.data_classification == "restricted"
 
 
 def test_unified_services_reach_namespace_contexts() -> None:

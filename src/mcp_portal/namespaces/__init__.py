@@ -24,6 +24,7 @@ from mcp_portal.egress import (
     StructuredPayloadInspector,
 )
 from mcp_portal.errors import PermissionPortalError
+from mcp_portal.execution import ExecutionCell, require_execution_cell
 from mcp_portal.observability import create_telemetry_recorder
 from mcp_portal.redaction import Redactor
 from mcp_portal.security import InvocationContext, current_invocation
@@ -105,7 +106,19 @@ class NamespaceContext:
         invocation = current_invocation()
         if invocation is None:
             raise RuntimeError("Invocation context is unavailable outside a tool request")
+        require_execution_cell(invocation, namespace=self.name)
         return invocation
+
+    def execution_cell(self) -> ExecutionCell:
+        """Return the active single-use cell bound to this namespace.
+
+        Returns:
+            Active execution-cell metadata.
+        """
+        invocation = current_invocation()
+        if invocation is None:
+            raise RuntimeError("Invocation context is unavailable outside a tool request")
+        return require_execution_cell(invocation, namespace=self.name)
 
     def tenant_scope(self) -> TenantScope:
         """Return storage partitions derived from verified invocation identity.

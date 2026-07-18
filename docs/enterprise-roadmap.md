@@ -34,6 +34,12 @@ do not leak into namespace business logic.
    deadlines, and response-size limits. Replace the memory quota backend with Redis or an
    API-gateway adapter for horizontally scaled deployments.
 
+   Implemented execution cells create a single-use request/tool/identity/namespace lease after
+   admission, reject nesting and expired inherited contexts, bind namespace capabilities to the
+   active cell, and correlate cell start/completion audit evidence. Restricted namespaces require
+   the existing remote provider process or network boundary by default; local cells are explicitly
+   treated as logical isolation for trusted code rather than an OS sandbox.
+
 ## Phase 2: Governed capabilities
 
 5. **Catalog and lifecycle** — require namespace owner, version, maturity, classification,

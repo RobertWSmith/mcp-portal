@@ -86,18 +86,23 @@ production transports.
 
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
-| `MCP_PORTAL_AUTH_PROVIDER` | `none` | No | Authentication provider. Accepted values are `none`, `static`, `jwt`, `ldap`, `kerberos`, and `ldap+kerberos`; unsupported values fall back to `none`. |
+| `MCP_PORTAL_AUTH_PROVIDER` | `none` | No | Authentication provider. Use `oauth` for a discoverable remote OAuth resource server. Legacy values are `none`, `static`, `jwt`, `ldap`, `kerberos`, and `ldap+kerberos`; unsupported values fall back to `none`. |
 | `MCP_PORTAL_AUTH_REQUIRED_SCOPES` | unset | No | Scopes required on every accepted bearer token. Accepts comma-separated or space-separated values. |
 | `MCP_PORTAL_AUTH_REQUIRED_LINUX_GROUPS` | unset | No | Linux/NSS groups required for every authenticated subject. All configured memberships must be present; unresolved users fail closed. |
 | `MCP_PORTAL_AUTH_STATIC_TOKEN` | unset | When provider is `static` | Static bearer token for local smoke tests. Static auth is not recommended for remote production deployments. |
 | `MCP_PORTAL_AUTH_STATIC_CLIENT_ID` | `mcp-portal-static` | No | Client id attached to the static token. |
 | `MCP_PORTAL_AUTH_STATIC_SCOPES` | unset | No | Scopes attached to the static token. If unset, static auth uses `MCP_PORTAL_AUTH_REQUIRED_SCOPES`. |
-| `MCP_PORTAL_AUTH_JWT_PUBLIC_KEY` | unset | One of this or `MCP_PORTAL_AUTH_JWT_JWKS_URI` when provider is `jwt` | Static JWT verification key or shared secret accepted by FastMCP's `JWTVerifier`. |
-| `MCP_PORTAL_AUTH_JWT_JWKS_URI` | unset | One of this or `MCP_PORTAL_AUTH_JWT_PUBLIC_KEY` when provider is `jwt` | Remote JWKS endpoint used to verify JWTs. |
-| `MCP_PORTAL_AUTH_JWT_ISSUER` | unset | No | Optional expected JWT issuer. |
-| `MCP_PORTAL_AUTH_JWT_AUDIENCE` | unset | No | Optional expected JWT audience. |
+| `MCP_PORTAL_AUTH_JWT_PUBLIC_KEY` | unset | One of this or `MCP_PORTAL_AUTH_JWT_JWKS_URI` when provider is `jwt` | Static JWT verification key or shared secret for legacy verifier-only mode. OAuth mode rejects static keys. |
+| `MCP_PORTAL_AUTH_JWT_JWKS_URI` | unset | Required for `oauth`; alternative to public key for `jwt` | HTTPS JWKS endpoint used to verify JWTs and rotate signing keys. |
+| `MCP_PORTAL_AUTH_JWT_ISSUER` | unset | Required for `oauth` and hardened JWT production | Exact expected JWT issuer. |
+| `MCP_PORTAL_AUTH_JWT_AUDIENCE` | unset | Required for `oauth` and hardened JWT production | Exact expected JWT audience. In OAuth mode it must equal the resource-server URL. |
 | `MCP_PORTAL_AUTH_JWT_ALGORITHM` | `RS256` | No | JWT signing algorithm to accept. |
-| `MCP_PORTAL_AUTH_RESOURCE_SERVER_URL` | unset | Required for hardened JWT production | Canonical external HTTPS URI used for Protected Resource Metadata and resource/audience binding. |
+| `MCP_PORTAL_AUTH_JWT_CLOCK_SKEW_SECONDS` | `60` | No | Non-negative clock skew allowed for JWT `nbf` and `iat` claims. |
+| `MCP_PORTAL_AUTH_JWT_SUBJECT_CLAIM` | `sub` | No | Claim containing the human or workload subject. |
+| `MCP_PORTAL_AUTH_JWT_CLIENT_ID_CLAIMS` | `client_id,azp,appid` | No | Ordered claims used to identify the OAuth client. A token must contain a subject or one of these client claims. |
+| `MCP_PORTAL_AUTH_JWT_ROLES_CLAIM` | `roles` | No | Application-role claim. String values are merged with delegated OAuth scopes for portal authorization. |
+| `MCP_PORTAL_AUTH_AUTHORIZATION_SERVER_URL` | unset | Required for `oauth` | Authorization-server issuer advertised through OAuth Protected Resource Metadata. |
+| `MCP_PORTAL_AUTH_RESOURCE_SERVER_URL` | unset | Required for `oauth` and hardened JWT production | Exact external HTTPS MCP resource URI. It must end in `MCP_PORTAL_HTTP_PATH`; OAuth uses it for discovery and audience binding. |
 | `MCP_PORTAL_AUTH_LDAP_URI` | unset | When LDAP is enabled | Directory URI. Must use `ldaps://`, or `ldap://` together with StartTLS. |
 | `MCP_PORTAL_AUTH_LDAP_BASE_DN` | unset | When LDAP search mode is used | Base DN beneath which the username is searched. |
 | `MCP_PORTAL_AUTH_LDAP_USER_DN_TEMPLATE` | unset | Alternative to base-DN search | Direct bind DN template containing `{username}`, for example `uid={username},ou=people,dc=example,dc=com`. |
@@ -113,14 +118,32 @@ production transports.
 | `MCP_PORTAL_AUTH_KERBEROS_KEYTAB` | platform credentials | No | Optional acceptor keytab. When set, MCP Portal initializes `KRB5_KTNAME` only if the process has not already set it. |
 | `MCP_PORTAL_AUTH_KERBEROS_SCOPES` | required scopes | No | Scopes granted to successfully authenticated Kerberos principals. |
 
-For remote HTTP deployments, prefer `MCP_PORTAL_AUTH_PROVIDER=jwt` with a JWKS URI or
-public key. The static provider exists mainly for local smoke tests.
+For remote HTTP deployments, use `MCP_PORTAL_AUTH_PROVIDER=oauth`. The portal remains a
+resource server: the external authorization server handles login, MFA, consent, clients, and
+token issuance. The portal validates audience-bound access tokens and publishes RFC 9728
+Protected Resource Metadata. Verifier-only `jwt` and `static` modes do not publish an OAuth
+authorization-server relationship and are intended for migration or local testing.
+
+Example OAuth resource server:
+
+```dotenv
+MCP_PORTAL_AUTH_PROVIDER=oauth
+MCP_PORTAL_AUTH_REQUIRED_SCOPES=portal.read
+MCP_PORTAL_AUTH_JWT_JWKS_URI=https://login.example.com/oauth2/jwks
+MCP_PORTAL_AUTH_JWT_ISSUER=https://login.example.com
+MCP_PORTAL_AUTH_JWT_AUDIENCE=https://portal.example.com/mcp
+MCP_PORTAL_AUTH_AUTHORIZATION_SERVER_URL=https://login.example.com
+MCP_PORTAL_AUTH_RESOURCE_SERVER_URL=https://portal.example.com/mcp
+MCP_PORTAL_PRODUCTION_REQUIRE_AUTH=true
+```
 
 LDAP accepts standard HTTP Basic credentials and validates them with a directory bind.
 Kerberos accepts standard HTTP `Negotiate` service tickets and deliberately requests the
 Kerberos protocol rather than allowing NTLM fallback. When both are needed, set
 `MCP_PORTAL_AUTH_PROVIDER=ldap+kerberos`; a request succeeds through either configured
 mechanism. Serve the portal itself over HTTPS whenever Basic authentication is enabled.
+For the OAuth target architecture, integrate LDAP and Kerberos with the external identity
+provider and use their resulting OAuth access tokens at the portal boundary.
 
 Install the matching optional dependency before enabling a provider:
 
@@ -292,7 +315,7 @@ fields so the portal can enforce its mandatory backend pre-filter.
 | `MCP_PORTAL_MULTI_INSTANCE` | `false` | No | Require explicitly configured distributed quota and durable task adapters for horizontally scaled deployments. |
 | `MCP_PORTAL_REQUIRE_TENANT` | `false` | No | Deny authenticated tool calls without the configured verified tenant claim. Enable for multi-tenant deployments. |
 | `MCP_PORTAL_TENANT_CLAIM` | `tenant_id` | No | Verified token claim used to partition tenant state. |
-| `MCP_PORTAL_AUDIT_ENABLED` | `true` | No | Emit sanitized authorization and completion audit events. |
+| `MCP_PORTAL_AUDIT_ENABLED` | `true` | No | Emit sanitized authorization, execution-cell start, egress decision, and completion audit events. |
 | `MCP_PORTAL_TOOL_TIMEOUT_SECONDS` | `45` | No | Default deadline applied to every tool invocation. |
 | `MCP_PORTAL_TOOL_TIMEOUT_OVERRIDES` | unset | No | Semicolon-separated fully-qualified tool deadlines, for example `finance_export=120;search_query=5`. Deployment values override tool metadata. |
 | `MCP_PORTAL_MAX_CONCURRENT_REQUESTS` | `100` | No | Maximum concurrent in-process tool executions. |
@@ -305,11 +328,25 @@ fields so the portal can enforce its mandatory backend pre-filter.
 | `MCP_PORTAL_EGRESS_ALLOWED_HOSTS` | unset | Recommended | Exact comma- or space-separated HTTPS hostname allowlist exposed to namespaces. |
 | `MCP_PORTAL_EGRESS_DESTINATION_CLASSIFICATIONS` | unset | Required for non-public egress | Semicolon-separated maximum data classification per approved host, for example `records.example.com=confidential;hooks.example.com=public`. Approved hosts without a rule accept only `public` data. |
 | `MCP_PORTAL_EGRESS_SENSITIVE_FIELD_ACTION` | `block` | No | `block` denies payloads containing detected credentials, personal identifiers, binary data, or opaque objects. `redact` removes detected values before destination classification is evaluated. |
+| `MCP_PORTAL_EXECUTION_REMOTE_CLASSIFICATIONS` | `restricted` | No | Comma- or space-separated namespace classifications that must use `RemoteNamespaceProvider`. Set to `none` only when an equivalent external isolation control exists. |
 | `MCP_PORTAL_NAMESPACE_ALLOWLIST` | unset | Recommended | Namespace names admitted into this deployment. Empty retains automatic discovery behavior. |
 
 Tools may declare `timeout_seconds` and `max_concurrency` in their portal `_meta`; the
 fully-qualified environment maps take precedence. Namespace network and database operations
 should use the shared downstream boundary so timeouts, breaker state, and readiness agree:
+
+Every admitted tool call runs in a unique, single-use execution cell after authorization,
+approval, quota, and concurrency admission. The cell is bound to the server request, exact tool,
+verified identity partition, namespace, classification, isolation mode, and deadline. Nested cells,
+cross-namespace capability access, and reuse from an inherited background task are denied. Cell
+start and completion share an opaque audit identifier.
+
+An `in_process` cell is a logical capability and lifetime boundary for trusted namespace code; it
+is not an operating-system sandbox. Namespace classifications listed in
+`MCP_PORTAL_EXECUTION_REMOTE_CLASSIFICATIONS` fail startup unless the namespace returns a
+`RemoteNamespaceProvider`, which supplies the process or network boundary. Do not retain
+`NamespaceContext` capabilities in background tasks after a tool returns; use the governed task
+store and an independently authorized worker instead.
 
 ```python
 from mcp_portal.egress import EgressRequest

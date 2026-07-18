@@ -108,6 +108,22 @@ def _auth_settings_from_env() -> AuthSettings:
         jwt_issuer=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_JWT_ISSUER),
         jwt_audience=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_JWT_AUDIENCE),
         jwt_algorithm=os.getenv(EnvironmentVariable.MCP_PORTAL_AUTH_JWT_ALGORITHM, "RS256"),
+        jwt_clock_skew_seconds=_float_env(
+            EnvironmentVariable.MCP_PORTAL_AUTH_JWT_CLOCK_SKEW_SECONDS, default=60.0
+        ),
+        jwt_subject_claim=(
+            _optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_JWT_SUBJECT_CLAIM) or "sub"
+        ),
+        jwt_client_id_claims=(
+            _csv_env(EnvironmentVariable.MCP_PORTAL_AUTH_JWT_CLIENT_ID_CLAIMS)
+            or ("client_id", "azp", "appid")
+        ),
+        jwt_roles_claim=(
+            _optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_JWT_ROLES_CLAIM) or "roles"
+        ),
+        authorization_server_url=_optional_env(
+            EnvironmentVariable.MCP_PORTAL_AUTH_AUTHORIZATION_SERVER_URL
+        ),
         resource_server_url=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_RESOURCE_SERVER_URL),
         ldap_uri=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_URI),
         ldap_base_dn=_optional_env(EnvironmentVariable.MCP_PORTAL_AUTH_LDAP_BASE_DN),
@@ -243,6 +259,10 @@ def _enterprise_settings_from_env() -> EnterpriseSettings:
         ),
         egress_sensitive_field_action=_egress_action_env(
             EnvironmentVariable.MCP_PORTAL_EGRESS_SENSITIVE_FIELD_ACTION
+        ),
+        execution_remote_classifications=_classification_tuple_env(
+            EnvironmentVariable.MCP_PORTAL_EXECUTION_REMOTE_CLASSIFICATIONS,
+            default=("restricted",),
         ),
         namespace_allowlist=_csv_env(EnvironmentVariable.MCP_PORTAL_NAMESPACE_ALLOWLIST),
     )
@@ -497,7 +517,7 @@ def _auth_provider_env(name: str, *, default: AuthProviderName) -> AuthProviderN
     value = (_optional_env(name) or default).lower()
     if value in {"ldap+kerberos", "kerberos+ldap"}:
         return "ldap_kerberos"
-    if value in {"none", "static", "jwt", "ldap", "kerberos", "ldap_kerberos"}:
+    if value in {"none", "static", "oauth", "jwt", "ldap", "kerberos", "ldap_kerberos"}:
         return value
     return default
 
@@ -609,3 +629,29 @@ def _egress_action_env(name: str) -> str:
     """
     selected = (_optional_env(name) or "block").lower()
     return selected if selected in {"block", "redact"} else "block"
+
+
+def _classification_tuple_env(name: str, *, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Read a comma- or space-separated data-classification policy.
+
+    Args:
+        name: Environment variable name to read.
+        default: Safe policy returned when the value is absent or invalid.
+
+    Returns:
+        Normalized unique classifications, or an empty tuple for explicit `none`.
+    """
+    value = _optional_env(name)
+    if value is None:
+        return default
+    selected = tuple(
+        dict.fromkeys(part.lower() for part in value.replace(",", " ").split() if part)
+    )
+    if selected == ("none",):
+        return ()
+    if not selected or any(
+        classification not in {"public", "internal", "confidential", "restricted"}
+        for classification in selected
+    ):
+        return default
+    return selected

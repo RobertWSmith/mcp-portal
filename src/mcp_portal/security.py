@@ -22,16 +22,24 @@ class InvocationIdentity:
         tenant_id: Trusted tenant partition identifier.
         client_id: OAuth client application identifier.
         scopes: Verified authorization scopes.
+        roles: Verified application roles mapped from the access token.
         linux_groups: Linux/NSS groups resolved for the verified subject.
         auth_method: Authentication method metadata.
+        auth_methods: Structured authentication-method references.
+        issuer: Verified token issuer.
+        principal_type: Anonymous, delegated user, or application identity.
     """
 
     subject: str | None = None
     tenant_id: str | None = None
     client_id: str | None = None
     scopes: frozenset[str] = field(default_factory=frozenset)
+    roles: frozenset[str] = field(default_factory=frozenset)
     linux_groups: frozenset[str] = field(default_factory=frozenset)
     auth_method: str = "anonymous"
+    auth_methods: frozenset[str] = field(default_factory=frozenset)
+    issuer: str | None = None
+    principal_type: str = "anonymous"
 
 
 @dataclass(frozen=True)
@@ -134,7 +142,25 @@ def identity_from_token(token: AccessToken, tenant_claim: str) -> InvocationIden
     claims: dict[str, Any] = token.claims or {}
     tenant = claims.get(tenant_claim)
     subject = token.subject or claims.get("sub")
-    auth_method = str(claims.get("auth_method", claims.get("amr", "bearer")))
+    raw_auth_method = claims.get("auth_method")
+    auth_methods = _string_values(claims.get("amr"))
+    if isinstance(raw_auth_method, str) and raw_auth_method:
+        auth_method = raw_auth_method
+        auth_methods = auth_methods | {raw_auth_method}
+    else:
+        auth_method = "bearer"
+        auth_methods = auth_methods | {auth_method}
+    if "_portal_client_id" in claims:
+        normalized_client_id = claims.get("_portal_client_id")
+        client_id = str(normalized_client_id) if normalized_client_id else None
+    else:
+        client_id = token.client_id
+    roles = _string_values(claims.get("_portal_roles", claims.get("roles")))
+    principal_type = (
+        "delegated_user"
+        if subject is not None
+        else "application" if client_id is not None else "anonymous"
+    )
     linux_groups = (
         linux_groups_for_subject(str(subject), strip_realm=auth_method == "kerberos")
         if subject is not None
@@ -143,11 +169,31 @@ def identity_from_token(token: AccessToken, tenant_claim: str) -> InvocationIden
     return InvocationIdentity(
         subject=str(subject) if subject is not None else None,
         tenant_id=str(tenant) if tenant is not None else None,
-        client_id=token.client_id,
+        client_id=client_id,
         scopes=frozenset(token.scopes),
+        roles=frozenset(roles),
         linux_groups=linux_groups,
         auth_method=auth_method,
+        auth_methods=frozenset(auth_methods),
+        issuer=str(claims["iss"]) if isinstance(claims.get("iss"), str) else None,
+        principal_type=principal_type,
     )
+
+
+def _string_values(value: Any) -> set[str]:
+    """Normalize a string or string-array security claim.
+
+    Args:
+        value: Verified security-claim value.
+
+    Returns:
+        Normalized nonempty string values.
+    """
+    if isinstance(value, str):
+        return {item for item in value.split() if item}
+    if isinstance(value, list):
+        return {item for item in value if isinstance(item, str) and item}
+    return set()
 
 
 def linux_groups_for_subject(subject: str, *, strip_realm: bool = False) -> frozenset[str]:

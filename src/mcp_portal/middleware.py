@@ -14,6 +14,7 @@ from fastmcp.tools import Tool, ToolResult
 
 from mcp_portal.audit import AuditDetails, audit_event
 from mcp_portal.errors import PermissionPortalError, TimeoutPortalError, UpstreamPortalError
+from mcp_portal.execution import ExecutionCell
 from mcp_portal.namespaces import Namespace
 from mcp_portal.policy import PolicyDecision
 from mcp_portal.security import InvocationContext, invocation_scope, new_invocation
@@ -87,7 +88,7 @@ class InvocationContextMiddleware(Middleware):
         if tool is None:
             return await call_next(context)
         namespace = self.server.component_namespace("tool", name)
-        if namespace is not None and (tool.meta or {}).get("namespace") is None:
+        if namespace is not None:
             meta = dict(tool.meta or {})
             meta.update(
                 {
@@ -96,6 +97,7 @@ class InvocationContextMiddleware(Middleware):
                     "owner": namespace.owner,
                     "maturity": namespace.maturity,
                     "data_classification": namespace.data_classification,
+                    "execution_isolation": self.server.execution_isolation(namespace),
                     "required_scopes": sorted(
                         namespace.required_scopes
                         | frozenset(
@@ -289,6 +291,7 @@ class ExecutionControlMiddleware(Middleware):
         outcome = "succeeded"
         admission_started = time.perf_counter()
         admission_wait = 0.0
+        cell: ExecutionCell | None = None
         try:
             with anyio.fail_after(call.invocation.deadline_seconds):
                 async with self.server.admission.capacity_for(
@@ -296,7 +299,36 @@ class ExecutionControlMiddleware(Middleware):
                     settings.enterprise.tool_concurrency(call.name, call.tool.meta),
                 ):
                     admission_wait = time.perf_counter() - admission_started
-                    result = await call_next(context)
+                    namespace = self.server.component_namespace("tool", call.name)
+                    namespace_name = namespace.name if namespace is not None else "__development__"
+                    data_classification = (
+                        namespace.data_classification
+                        if namespace is not None
+                        else str((call.tool.meta or {}).get("data_classification", "internal"))
+                    )
+                    isolation = self.server.execution_isolation(namespace)
+                    with self.server.execution_cells.open(
+                        call.invocation,
+                        namespace=namespace_name,
+                        data_classification=data_classification,
+                        isolation=isolation,
+                    ) as active_cell:
+                        cell = active_cell
+                        if settings.enterprise.audit_enabled:
+                            await self.server.audit_sink.append(
+                                audit_event(
+                                    "execution_cell_started",
+                                    call.invocation,
+                                    call.arguments,
+                                    AuditDetails(
+                                        data_classification=cell.data_classification,
+                                        execution_cell_id=cell.cell_id,
+                                        execution_cell_namespace=cell.namespace,
+                                        execution_isolation=cell.isolation,
+                                    ),
+                                )
+                            )
+                        result = await call_next(context)
             self._validate_response_size(result)
             return result
         except TimeoutError as error:
@@ -323,7 +355,16 @@ class ExecutionControlMiddleware(Middleware):
                         "completion",
                         call.invocation,
                         call.arguments,
-                        AuditDetails(outcome=outcome, duration_ms=duration * 1000),
+                        AuditDetails(
+                            outcome=outcome,
+                            duration_ms=duration * 1000,
+                            data_classification=(
+                                cell.data_classification if cell is not None else None
+                            ),
+                            execution_cell_id=cell.cell_id if cell is not None else None,
+                            execution_cell_namespace=(cell.namespace if cell is not None else None),
+                            execution_isolation=cell.isolation if cell is not None else None,
+                        ),
                     )
                 )
 

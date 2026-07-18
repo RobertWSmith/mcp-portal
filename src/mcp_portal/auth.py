@@ -9,17 +9,17 @@ from functools import partial
 import importlib.util
 import os
 import ssl
+import time
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import anyio
 from fastmcp.server.auth import (
     AccessToken,
-    AuthCheck,
     AuthProvider,
     JWTVerifier,
+    RemoteAuthProvider,
     StaticTokenVerifier,
-    restrict_tag,
 )
 
 from mcp_portal.config import Settings
@@ -61,21 +61,11 @@ def create_auth_provider(settings: Settings) -> AuthProvider | None:
             required_scopes=list(settings.auth.required_scopes),
         )
 
-    if settings.auth.provider == "jwt":
-        if settings.auth.jwt_public_key is None and settings.auth.jwt_jwks_uri is None:
-            raise ConfigurationPortalError(
-                "JWT authentication requires MCP_PORTAL_AUTH_JWT_PUBLIC_KEY or "
-                "MCP_PORTAL_AUTH_JWT_JWKS_URI.",
-                details={"provider": "jwt"},
-            )
-        return JWTVerifier(
-            public_key=settings.auth.jwt_public_key,
-            jwks_uri=settings.auth.jwt_jwks_uri,
-            issuer=settings.auth.jwt_issuer,
-            audience=settings.auth.jwt_audience,
-            algorithm=settings.auth.jwt_algorithm,
-            required_scopes=list(settings.auth.required_scopes),
-        )
+    if settings.auth.provider in {"oauth", "jwt"}:
+        verifier = _create_jwt_verifier(settings)
+        if settings.auth.provider == "jwt":
+            return verifier
+        return _create_oauth_resource_server(settings, verifier)
 
     if settings.auth.provider in {"ldap", "kerberos", "ldap_kerberos"}:
         return _create_enterprise_verifier(settings)
@@ -86,19 +76,247 @@ def create_auth_provider(settings: Settings) -> AuthProvider | None:
     )
 
 
-def create_authorization_checks(settings: Settings) -> list[AuthCheck]:
-    """Create tag-based authorization checks from runtime settings.
+class PortalJWTVerifier(JWTVerifier):
+    """Verify JWTs and normalize trusted OAuth identity and permission claims."""
+
+    def __init__(self, settings: Settings) -> None:
+        """Initialize strict JWT verification from portal settings.
+
+        Args:
+            settings: Portal settings containing JWT and claim mappings.
+        """
+        super().__init__(
+            public_key=settings.auth.jwt_public_key,
+            jwks_uri=settings.auth.jwt_jwks_uri,
+            issuer=settings.auth.jwt_issuer,
+            audience=settings.auth.jwt_audience,
+            algorithm=settings.auth.jwt_algorithm,
+        )
+        self.portal_auth = settings.auth
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        """Validate a bearer token and reject tokens without a real principal.
+
+        Args:
+            token: Encoded JWT bearer token.
+
+        Returns:
+            A normalized access token, or None when validation fails.
+        """
+        verified = await super().verify_token(token)
+        if verified is None:
+            return None
+        claims = dict(verified.claims or {})
+        if self.portal_auth.provider == "oauth" and claims.get("exp") is None:
+            return None
+        if not _valid_temporal_claims(claims, self.portal_auth.jwt_clock_skew_seconds):
+            return None
+
+        subject = _string_claim(claims, self.portal_auth.jwt_subject_claim)
+        client_id = next(
+            (
+                value
+                for claim in self.portal_auth.jwt_client_id_claims
+                if (value := _string_claim(claims, claim)) is not None
+            ),
+            None,
+        )
+        if subject is None and client_id is None:
+            return None
+
+        roles = _claim_values(claims.get(self.portal_auth.jwt_roles_claim))
+        scopes = sorted(set(verified.scopes) | roles)
+        if not set(self.portal_auth.required_scopes) <= set(scopes):
+            return None
+
+        claims["_portal_client_id"] = client_id
+        claims["_portal_roles"] = sorted(roles)
+        claims["auth_method"] = "oauth" if self.portal_auth.provider == "oauth" else "bearer"
+        return AccessToken(
+            token=verified.token,
+            client_id=client_id or subject or "",
+            subject=subject,
+            scopes=scopes,
+            expires_at=verified.expires_at,
+            resource=verified.resource,
+            claims=claims,
+        )
+
+
+def _create_jwt_verifier(settings: Settings) -> PortalJWTVerifier:
+    """Validate JWT key configuration and construct the portal verifier.
 
     Args:
-        settings: Runtime settings containing authorization policy.
+        settings: Portal settings containing JWT verification configuration.
 
     Returns:
-        A list of FastMCP authorization checks.
+        Configured strict portal JWT verifier.
     """
-    return [
-        restrict_tag(tag, scopes=list(scopes))
-        for tag, scopes in sorted(settings.authorization.tag_scopes.items())
+    key_sources = sum(
+        value is not None for value in (settings.auth.jwt_public_key, settings.auth.jwt_jwks_uri)
+    )
+    if key_sources != 1:
+        raise ConfigurationPortalError(
+            "JWT authentication requires exactly one of MCP_PORTAL_AUTH_JWT_PUBLIC_KEY or "
+            "MCP_PORTAL_AUTH_JWT_JWKS_URI.",
+            details={"provider": settings.auth.provider},
+        )
+    if settings.auth.jwt_clock_skew_seconds < 0:
+        raise ConfigurationPortalError(
+            "JWT clock skew must be non-negative.",
+            details={"provider": settings.auth.provider},
+        )
+    try:
+        return PortalJWTVerifier(settings)
+    except ValueError as error:
+        raise ConfigurationPortalError(
+            "JWT authentication configuration is invalid.",
+            details={"provider": settings.auth.provider, "reason": str(error)},
+        ) from error
+
+
+def _create_oauth_resource_server(
+    settings: Settings, verifier: PortalJWTVerifier
+) -> RemoteAuthProvider:
+    """Create a discoverable OAuth protected resource around the JWT verifier.
+
+    Args:
+        settings: Portal settings containing OAuth discovery configuration.
+        verifier: Strict verifier used to authenticate access tokens.
+
+    Returns:
+        Discoverable remote OAuth resource-server provider.
+    """
+    auth = settings.auth
+    missing = [
+        name
+        for name, value in (
+            ("MCP_PORTAL_AUTH_AUTHORIZATION_SERVER_URL", auth.authorization_server_url),
+            ("MCP_PORTAL_AUTH_JWT_ISSUER", auth.jwt_issuer),
+            ("MCP_PORTAL_AUTH_JWT_AUDIENCE", auth.jwt_audience),
+            ("MCP_PORTAL_AUTH_RESOURCE_SERVER_URL", auth.resource_server_url),
+        )
+        if not value
     ]
+    if missing:
+        raise ConfigurationPortalError(
+            "OAuth authentication requires authorization-server, issuer, audience, and "
+            "resource-server URLs.",
+            details={"provider": "oauth", "missing": missing},
+        )
+    if auth.jwt_jwks_uri is None:
+        raise ConfigurationPortalError(
+            "OAuth authentication requires MCP_PORTAL_AUTH_JWT_JWKS_URI for key rotation.",
+            details={"provider": "oauth"},
+        )
+    base_url = _oauth_base_url(auth.resource_server_url, settings.http.path)
+    return RemoteAuthProvider(
+        token_verifier=verifier,
+        authorization_servers=[auth.authorization_server_url],
+        base_url=base_url,
+        scopes_supported=_supported_scopes(settings),
+        resource_name="MCP Portal",
+    )
+
+
+def _oauth_base_url(resource_url: str, mcp_path: str) -> str:
+    """Derive the public ASGI base URL from the exact MCP resource URL.
+
+    Args:
+        resource_url: Exact externally visible MCP resource URL.
+        mcp_path: Configured MCP HTTP endpoint path.
+
+    Returns:
+        External application base URL used to construct discovery routes.
+    """
+    parsed = urlsplit(resource_url)
+    normalized_mcp_path = f"/{mcp_path.strip('/')}"
+    resource_path = parsed.path.rstrip("/") or "/"
+    if (
+        not parsed.scheme
+        or not parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or not resource_path.endswith(normalized_mcp_path)
+    ):
+        raise ConfigurationPortalError(
+            "OAuth resource server URL must be an absolute URL ending in the configured "
+            "MCP HTTP path and must not contain a query or fragment.",
+            details={"resource_server_url": resource_url, "http_path": mcp_path},
+        )
+    base_path = resource_path[: -len(normalized_mcp_path)].rstrip("/")
+    return urlunsplit((parsed.scheme, parsed.netloc, base_path or "/", "", ""))
+
+
+def _supported_scopes(settings: Settings) -> list[str]:
+    """Return configured OAuth scopes advertised in protected-resource metadata.
+
+    Args:
+        settings: Portal authentication and authorization settings.
+
+    Returns:
+        Sorted configured OAuth scopes.
+    """
+    scopes = set(settings.auth.required_scopes)
+    for configured in settings.authorization.tag_scopes.values():
+        scopes.update(configured)
+    for configured in settings.authorization.namespace_scopes.values():
+        scopes.update(configured)
+    return sorted(scopes)
+
+
+def _string_claim(claims: dict[str, Any], name: str) -> str | None:
+    """Return a nonempty scalar string claim.
+
+    Args:
+        claims: Verified access-token claims.
+        name: Claim name to read.
+
+    Returns:
+        Normalized claim value, or None when absent or invalid.
+    """
+    value = claims.get(name)
+    if not isinstance(value, str) or not value.strip() or value == "unknown":
+        return None
+    return value
+
+
+def _claim_values(value: Any) -> set[str]:
+    """Normalize a space-delimited or array claim into nonempty strings.
+
+    Args:
+        value: Untrusted verified-claim value.
+
+    Returns:
+        Normalized nonempty string values.
+    """
+    if isinstance(value, str):
+        return {item for item in value.split() if item}
+    if isinstance(value, list):
+        return {item for item in value if isinstance(item, str) and item}
+    return set()
+
+
+def _valid_temporal_claims(claims: dict[str, Any], clock_skew_seconds: float) -> bool:
+    """Validate not-before and issued-at claims with bounded clock skew.
+
+    Args:
+        claims: Verified access-token claims.
+        clock_skew_seconds: Maximum accepted future clock skew.
+
+    Returns:
+        True when temporal claims are numeric and currently valid.
+    """
+    now = time.time()
+    for claim in ("nbf", "iat"):
+        value = claims.get(claim)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        if value > now + clock_skew_seconds:
+            return False
+    return True
 
 
 class EnterpriseAuthProvider(AuthProvider):

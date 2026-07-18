@@ -17,7 +17,7 @@ from mcp_portal.errors import PermissionPortalError, ValidationPortalError
 from mcp_portal.errors import ConfigurationPortalError
 from mcp_portal.policy import ScopePolicyEngine
 from mcp_portal.namespaces import NamespaceDependencies
-from mcp_portal.security import InvocationContext, InvocationIdentity, invocation_scope
+from mcp_portal.security import InvocationContext, InvocationIdentity
 from mcp_portal.tasks import MemoryTaskStore
 from mcp_portal.tenancy import (
     AUTHORIZATION_FIELD,
@@ -30,7 +30,11 @@ from mcp_portal.tenancy import (
     TenantTaskService,
     TenantVectorStoreProxy,
 )
-from mcp_portal.testing import create_namespace_test_context, create_test_settings
+from mcp_portal.testing import (
+    create_namespace_test_context,
+    create_test_settings,
+    namespace_execution_scope,
+)
 
 
 def invocation(
@@ -459,7 +463,7 @@ async def test_namespace_context_exposes_only_invocation_bound_facades() -> None
         ),
     )
 
-    with invocation_scope(invocation()):
+    with namespace_execution_scope(context, invocation()):
         assert context.tenant_scope().tenant_id == "tenant-a"
         assert isinstance(context.tenant_tasks(), TenantTaskService)
         assert isinstance(context.tenant_sql(), TenantSQLExecutor)
@@ -534,7 +538,8 @@ async def test_cross_tenant_override_requires_explicit_admin_scope() -> None:
 
 def test_production_validation_requires_auth_for_tenant_isolation() -> None:
     settings = replace(create_test_settings(), enterprise=EnterpriseSettings(require_tenant=True))
-    with pytest.raises(PermissionPortalError), invocation_scope(invocation(None)):
-        create_namespace_test_context(settings=settings).tenant_scope()
+    context = create_namespace_test_context(settings=settings)
+    with pytest.raises(PermissionPortalError), namespace_execution_scope(context, invocation(None)):
+        context.tenant_scope()
     with pytest.raises(ConfigurationPortalError, match="unsafe"):
         settings.validate_production()

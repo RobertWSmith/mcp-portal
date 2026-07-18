@@ -192,6 +192,12 @@ class AuthSettings:
         jwt_issuer: Optional expected JWT issuer.
         jwt_audience: Optional expected JWT audience.
         jwt_algorithm: JWT signing algorithm to accept.
+        jwt_clock_skew_seconds: Allowed temporal-claim clock skew in seconds.
+        jwt_subject_claim: Claim containing the human or workload subject.
+        jwt_client_id_claims: Ordered claims used to identify the OAuth client.
+        jwt_roles_claim: Claim containing application roles mapped to permissions.
+        authorization_server_url: OAuth authorization server advertised to clients.
+        resource_server_url: Canonical externally visible MCP resource URL.
         ldap_uri: LDAP or LDAPS server URI.
         ldap_base_dn: Directory search base used to resolve usernames.
         ldap_user_dn_template: Optional direct user DN template containing ``{username}``.
@@ -219,6 +225,11 @@ class AuthSettings:
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
     jwt_algorithm: str = "RS256"
+    jwt_clock_skew_seconds: float = 60.0
+    jwt_subject_claim: str = "sub"
+    jwt_client_id_claims: tuple[str, ...] = ("client_id", "azp", "appid")
+    jwt_roles_claim: str = "roles"
+    authorization_server_url: str | None = None
     resource_server_url: str | None = None
     ldap_uri: str | None = None
     ldap_base_dn: str | None = None
@@ -262,6 +273,11 @@ class AuthSettings:
             "jwt_issuer_configured": self.jwt_issuer is not None,
             "jwt_audience_configured": self.jwt_audience is not None,
             "jwt_algorithm": self.jwt_algorithm,
+            "jwt_clock_skew_seconds": self.jwt_clock_skew_seconds,
+            "jwt_subject_claim": self.jwt_subject_claim,
+            "jwt_client_id_claims": list(self.jwt_client_id_claims),
+            "jwt_roles_claim": self.jwt_roles_claim,
+            "authorization_server_url_configured": self.authorization_server_url is not None,
             "resource_server_url_configured": self.resource_server_url is not None,
             "ldap_uri_configured": self.ldap_uri is not None,
             "ldap_base_dn_configured": self.ldap_base_dn is not None,
@@ -416,6 +432,7 @@ class EnterpriseSettings:
         egress_allowed_hosts: Approved outbound DNS hostnames.
         egress_destination_classifications: Maximum data classification per host.
         egress_sensitive_field_action: Whether detected values block or are redacted.
+        execution_remote_classifications: Classifications requiring remote execution cells.
     """
 
     require_auth: bool = False
@@ -435,6 +452,7 @@ class EnterpriseSettings:
     egress_allowed_hosts: tuple[str, ...] = ()
     egress_destination_classifications: dict[str, str] = field(default_factory=dict)
     egress_sensitive_field_action: str = "block"
+    execution_remote_classifications: tuple[str, ...] = ("restricted",)
     namespace_allowlist: tuple[str, ...] = ()
 
     def public_snapshot(self) -> dict[str, object]:
@@ -469,6 +487,8 @@ class EnterpriseSettings:
                 for classification in ("public", "internal", "confidential", "restricted")
             },
             "egress_sensitive_field_action": self.egress_sensitive_field_action,
+            "execution_cells_enabled": True,
+            "execution_remote_classifications": list(self.execution_remote_classifications),
             "namespace_allowlist": list(self.namespace_allowlist),
         }
 

@@ -38,6 +38,9 @@ class AuditEvent:
         payload_digest: Optional digest of the original outbound payload.
         findings: Optional stable DLP finding labels without sensitive values.
         purpose: Optional low-cardinality outbound purpose.
+        execution_cell_id: Optional single-use execution-cell identifier.
+        execution_cell_namespace: Optional namespace bound to the execution cell.
+        execution_isolation: Optional in-process or remote isolation boundary.
     """
 
     occurred_at: str = field(metadata={"description": "UTC event timestamp."})
@@ -86,6 +89,15 @@ class AuditEvent:
     purpose: str | None = field(
         default=None, metadata={"description": "Optional low-cardinality outbound purpose."}
     )
+    execution_cell_id: str | None = field(
+        default=None, metadata={"description": "Optional single-use execution-cell identifier."}
+    )
+    execution_cell_namespace: str | None = field(
+        default=None, metadata={"description": "Optional execution-cell namespace."}
+    )
+    execution_isolation: str | None = field(
+        default=None, metadata={"description": "Optional execution-cell isolation boundary."}
+    )
 
 
 @dataclass(frozen=True)
@@ -106,6 +118,9 @@ class AuditDetails:
         payload_digest: Optional outbound payload digest.
         findings: Stable DLP finding labels without sensitive values.
         purpose: Optional low-cardinality outbound purpose.
+        execution_cell_id: Optional single-use execution-cell identifier.
+        execution_cell_namespace: Optional namespace bound to the execution cell.
+        execution_isolation: Optional in-process or remote isolation boundary.
     """
 
     decision: PolicyDecision | None = field(
@@ -131,6 +146,9 @@ class AuditDetails:
     payload_digest: str | None = None
     findings: tuple[str, ...] = ()
     purpose: str | None = None
+    execution_cell_id: str | None = None
+    execution_cell_namespace: str | None = None
+    execution_isolation: str | None = None
 
 
 class AuditSink(Protocol):
@@ -235,4 +253,7 @@ def audit_event(
         payload_digest=details.payload_digest,
         findings=details.findings,
         purpose=details.purpose,
+        execution_cell_id=details.execution_cell_id,
+        execution_cell_namespace=details.execution_cell_namespace,
+        execution_isolation=details.execution_isolation,
     )
