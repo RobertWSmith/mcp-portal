@@ -38,6 +38,10 @@ accepted values, loading behavior, and production requirements.
 The health namespace exposes only non-secret configuration metadata. It never returns
 raw API keys or Azure client secrets.
 
+The `public` namespace exposes `public_duckduckgo_search`, backed by LangChain
+Community's `DuckDuckGoSearchRun`. It declares no namespace-specific scopes, so any
+identity accepted by the portal authentication provider can discover and invoke it.
+
 ## Run
 
 ```powershell

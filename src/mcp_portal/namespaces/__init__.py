@@ -46,7 +46,10 @@ NamespaceHealthCheck = Callable[["NamespaceContext"], "NamespaceStatus"]
 NamespaceState = Literal["ok", "warning", "error", "disabled"]
 _SEMANTIC_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].+)?$")
 _DATA_CLASSIFICATIONS = frozenset({"public", "internal", "confidential", "restricted"})
-BUILTIN_NAMESPACE_MODULES = ("mcp_portal.namespaces.health",)
+BUILTIN_NAMESPACE_MODULES = (
+    "mcp_portal.namespaces.health",
+    "mcp_portal.namespaces.public",
+)
 NAMESPACE_ENTRY_POINT_GROUP = "mcp_portal.namespaces"
 
 
