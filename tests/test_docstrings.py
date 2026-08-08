@@ -206,9 +206,7 @@ def _annotated_description(annotation: ast.expr) -> str | None:
         (
             item.value
             for item in annotation.slice.elts[1:]
-            if isinstance(item, ast.Constant)
-            and isinstance(item.value, str)
-            and item.value.strip()
+            if isinstance(item, ast.Constant) and isinstance(item.value, str) and item.value.strip()
         ),
         None,
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_core.tools import BaseTool
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,7 +29,7 @@ class DuckDuckGoSearchResult(BaseModel):
     results: str = Field(description="DuckDuckGo search results with sources and snippets.")
 
 
-def _create_search_tool() -> DuckDuckGoSearchRun:
+def _create_search_tool() -> BaseTool:
     """Create the LangChain community DuckDuckGo search tool.
 
     Returns:
