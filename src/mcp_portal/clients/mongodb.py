@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 from mcp_portal.config import MongoDBCollectionName, MongoDBSettings, Settings
 from mcp_portal.errors import ConfigurationPortalError
@@ -21,7 +21,7 @@ class MongoDBConnectors:
         settings: Runtime settings for MongoDB connectors.
     """
 
-    settings: MongoDBSettings
+    settings: Annotated[MongoDBSettings, "Runtime settings for MongoDB connectors."]
 
     @property
     def connection_string(self) -> str:

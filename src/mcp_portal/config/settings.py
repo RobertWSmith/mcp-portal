@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Annotated
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -81,28 +82,53 @@ class Settings:
         authorization: Authorization policy applied by production middleware.
         middleware: Cross-cutting production middleware settings.
         http: HTTP and ASGI deployment settings.
+        enterprise: Cross-cutting enterprise control-plane settings.
         namespace_discovery: Namespace discovery behavior.
         observability: Observability export metadata.
         database: Preferred database backend settings.
         mongodb: MongoDB connector settings.
     """
 
-    openai: OpenAISettings
-    model_provider: ModelProviderName = "openai"
-    azure_openai: AzureOpenAISettings = field(default_factory=AzureOpenAISettings)
-    azure_identity: AzureIdentitySettings = field(default_factory=AzureIdentitySettings)
-    health: HealthSettings = field(default_factory=HealthSettings)
-    auth: AuthSettings = field(default_factory=AuthSettings)
-    authorization: AuthorizationSettings = field(default_factory=AuthorizationSettings)
-    middleware: MiddlewareSettings = field(default_factory=MiddlewareSettings)
-    http: HttpSettings = field(default_factory=HttpSettings)
-    enterprise: EnterpriseSettings = field(default_factory=EnterpriseSettings)
-    namespace_discovery: NamespaceDiscoverySettings = field(
-        default_factory=NamespaceDiscoverySettings
+    openai: Annotated[OpenAISettings, "Settings for direct OpenAI platform calls."]
+    model_provider: Annotated[
+        ModelProviderName, "Active model provider used by generic model settings."
+    ] = "openai"
+    azure_openai: Annotated[AzureOpenAISettings, "Settings for Azure OpenAI model calls."] = field(
+        default_factory=AzureOpenAISettings
     )
-    observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
-    database: DatabaseSettings = field(default_factory=DatabaseSettings)
-    mongodb: MongoDBSettings = field(default_factory=MongoDBSettings)
+    azure_identity: Annotated[AzureIdentitySettings, "Azure Identity environment settings."] = (
+        field(default_factory=AzureIdentitySettings)
+    )
+    health: Annotated[HealthSettings, "Settings used by the health namespace."] = field(
+        default_factory=HealthSettings
+    )
+    auth: Annotated[AuthSettings, "Authentication settings used by HTTP production transports."] = (
+        field(default_factory=AuthSettings)
+    )
+    authorization: Annotated[
+        AuthorizationSettings, "Authorization policy applied by production middleware."
+    ] = field(default_factory=AuthorizationSettings)
+    middleware: Annotated[MiddlewareSettings, "Cross-cutting production middleware settings."] = (
+        field(default_factory=MiddlewareSettings)
+    )
+    http: Annotated[HttpSettings, "HTTP and ASGI deployment settings."] = field(
+        default_factory=HttpSettings
+    )
+    enterprise: Annotated[
+        EnterpriseSettings, "Cross-cutting enterprise control-plane settings."
+    ] = field(default_factory=EnterpriseSettings)
+    namespace_discovery: Annotated[NamespaceDiscoverySettings, "Namespace discovery behavior."] = (
+        field(default_factory=NamespaceDiscoverySettings)
+    )
+    observability: Annotated[ObservabilitySettings, "Observability export metadata."] = field(
+        default_factory=ObservabilitySettings
+    )
+    database: Annotated[DatabaseSettings, "Preferred database backend settings."] = field(
+        default_factory=DatabaseSettings
+    )
+    mongodb: Annotated[MongoDBSettings, "MongoDB connector settings."] = field(
+        default_factory=MongoDBSettings
+    )
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None, override: bool = False) -> "Settings":

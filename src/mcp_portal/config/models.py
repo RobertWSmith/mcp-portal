@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Annotated
 
 from mcp_portal.config.constants import (
     AuthProviderName,
@@ -28,10 +29,10 @@ class OpenAISettings:
         embedding_model: OpenAI model name for embedding tasks.
     """
 
-    api_key: str | None
-    large_language_model: str
-    small_language_model: str
-    embedding_model: str
+    api_key: Annotated[str | None, "Optional OpenAI platform API key."]
+    large_language_model: Annotated[str, "OpenAI model name for larger language-model tasks."]
+    small_language_model: Annotated[str, "OpenAI model name for smaller language-model tasks."]
+    embedding_model: Annotated[str, "OpenAI model name for embedding tasks."]
 
     @property
     def has_api_key(self) -> bool:
@@ -69,12 +70,18 @@ class AzureOpenAISettings:
         embedding_model_deployment: Deployment name for embedding tasks.
     """
 
-    endpoint: str | None = None
-    api_version: str | None = None
-    token_scope: str = DEFAULT_AZURE_OPENAI_TOKEN_SCOPE
-    large_language_model_deployment: str | None = None
-    small_language_model_deployment: str | None = None
-    embedding_model_deployment: str | None = None
+    endpoint: Annotated[str | None, "Azure OpenAI resource endpoint."] = None
+    api_version: Annotated[str | None, "Azure OpenAI API version used by SDK clients."] = None
+    token_scope: Annotated[
+        str, "Azure resource scope requested from Azure Identity credentials."
+    ] = DEFAULT_AZURE_OPENAI_TOKEN_SCOPE
+    large_language_model_deployment: Annotated[
+        str | None, "Deployment name for larger language-model tasks."
+    ] = None
+    small_language_model_deployment: Annotated[
+        str | None, "Deployment name for smaller language-model tasks."
+    ] = None
+    embedding_model_deployment: Annotated[str | None, "Deployment name for embedding tasks."] = None
 
     @property
     def deployments_configured(self) -> bool:
@@ -130,9 +137,13 @@ class AzureIdentitySettings:
         client_secret: Optional Azure client secret for service-principal auth.
     """
 
-    tenant_id: str | None = None
-    client_id: str | None = None
-    client_secret: str | None = None
+    tenant_id: Annotated[str | None, "Optional Azure tenant id for service-principal auth."] = None
+    client_id: Annotated[
+        str | None, "Optional Azure client/application id for service-principal auth."
+    ] = None
+    client_secret: Annotated[
+        str | None, "Optional Azure client secret for service-principal auth."
+    ] = None
 
     @property
     def service_principal_configured(self) -> bool:
@@ -165,7 +176,7 @@ class HealthSettings:
         enabled: Whether the health namespace tools should be mounted.
     """
 
-    enabled: bool = True
+    enabled: Annotated[bool, "Whether the health namespace tools should be mounted."] = True
 
     def public_snapshot(self) -> dict[str, bool]:
         """Return health settings safe to expose through development tools.
@@ -214,37 +225,67 @@ class AuthSettings:
         kerberos_scopes: Scopes granted to Kerberos-authenticated principals.
     """
 
-    provider: AuthProviderName = "none"
-    required_scopes: tuple[str, ...] = ()
-    required_linux_groups: tuple[str, ...] = ()
-    static_token: str | None = None
-    static_client_id: str = "mcp-portal-static"
-    static_scopes: tuple[str, ...] = ()
-    jwt_public_key: str | None = None
-    jwt_jwks_uri: str | None = None
-    jwt_issuer: str | None = None
-    jwt_audience: str | None = None
-    jwt_algorithm: str = "RS256"
-    jwt_clock_skew_seconds: float = 60.0
-    jwt_subject_claim: str = "sub"
-    jwt_client_id_claims: tuple[str, ...] = ("client_id", "azp", "appid")
-    jwt_roles_claim: str = "roles"
-    authorization_server_url: str | None = None
-    resource_server_url: str | None = None
-    ldap_uri: str | None = None
-    ldap_base_dn: str | None = None
-    ldap_user_dn_template: str | None = None
-    ldap_search_filter: str = "(uid={username})"
-    ldap_bind_dn: str | None = None
-    ldap_bind_password: str | None = None
-    ldap_start_tls: bool = False
-    ldap_ca_cert_file: str | None = None
-    ldap_connect_timeout: float = 5.0
-    ldap_scopes: tuple[str, ...] = ()
-    kerberos_hostname: str | None = None
-    kerberos_service: str = "HTTP"
-    kerberos_keytab: str | None = None
-    kerberos_scopes: tuple[str, ...] = ()
+    provider: Annotated[AuthProviderName, "Authentication provider strategy."] = "none"
+    required_scopes: Annotated[
+        tuple[str, ...], "Scopes required on every accepted bearer token."
+    ] = ()
+    required_linux_groups: Annotated[
+        tuple[str, ...], "Linux groups required for every authenticated caller."
+    ] = ()
+    static_token: Annotated[str | None, "Development-only static bearer token."] = None
+    static_client_id: Annotated[str, "Client id attached to the static token."] = (
+        "mcp-portal-static"
+    )
+    static_scopes: Annotated[tuple[str, ...], "Scopes attached to the static token."] = ()
+    jwt_public_key: Annotated[str | None, "Static JWT verification key or shared secret."] = None
+    jwt_jwks_uri: Annotated[str | None, "Remote JWKS endpoint for JWT verification."] = None
+    jwt_issuer: Annotated[str | None, "Optional expected JWT issuer."] = None
+    jwt_audience: Annotated[str | None, "Optional expected JWT audience."] = None
+    jwt_algorithm: Annotated[str, "JWT signing algorithm to accept."] = "RS256"
+    jwt_clock_skew_seconds: Annotated[float, "Allowed temporal-claim clock skew in seconds."] = 60.0
+    jwt_subject_claim: Annotated[str, "Claim containing the human or workload subject."] = "sub"
+    jwt_client_id_claims: Annotated[
+        tuple[str, ...], "Ordered claims used to identify the OAuth client."
+    ] = ("client_id", "azp", "appid")
+    jwt_roles_claim: Annotated[str, "Claim containing application roles mapped to permissions."] = (
+        "roles"
+    )
+    authorization_server_url: Annotated[
+        str | None, "OAuth authorization server advertised to clients."
+    ] = None
+    resource_server_url: Annotated[str | None, "Canonical externally visible MCP resource URL."] = (
+        None
+    )
+    ldap_uri: Annotated[str | None, "LDAP or LDAPS server URI."] = None
+    ldap_base_dn: Annotated[str | None, "Directory search base used to resolve usernames."] = None
+    ldap_user_dn_template: Annotated[
+        str | None, "Optional direct user DN template containing ``{username}``."
+    ] = None
+    ldap_search_filter: Annotated[str, "LDAP search filter containing ``{username}``."] = (
+        "(uid={username})"
+    )
+    ldap_bind_dn: Annotated[
+        str | None, "Optional service-account DN used for directory searches."
+    ] = None
+    ldap_bind_password: Annotated[
+        str | None, "Optional service-account password used for directory searches."
+    ] = None
+    ldap_start_tls: Annotated[bool, "Whether to upgrade an LDAP connection with StartTLS."] = False
+    ldap_ca_cert_file: Annotated[
+        str | None, "Optional CA bundle used to verify the directory certificate."
+    ] = None
+    ldap_connect_timeout: Annotated[float, "LDAP network and operation timeout in seconds."] = 5.0
+    ldap_scopes: Annotated[tuple[str, ...], "Scopes granted to LDAP-authenticated principals."] = ()
+    kerberos_hostname: Annotated[str | None, "Hostname portion of the HTTP service principal."] = (
+        None
+    )
+    kerberos_service: Annotated[str, "Service portion of the HTTP service principal."] = "HTTP"
+    kerberos_keytab: Annotated[
+        str | None, "Optional keytab path used by the Kerberos acceptor."
+    ] = None
+    kerberos_scopes: Annotated[
+        tuple[str, ...], "Scopes granted to Kerberos-authenticated principals."
+    ] = ()
 
     @property
     def enabled(self) -> bool:
@@ -304,11 +345,16 @@ class AuthorizationSettings:
         namespace_linux_groups: Linux groups required to discover or use a namespace.
     """
 
-    tag_scopes: dict[str, tuple[str, ...]] = field(
-        default_factory=lambda: dict(DEFAULT_TAG_SCOPE_RULES)
-    )
-    namespace_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    namespace_linux_groups: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    tag_scopes: Annotated[
+        dict[str, tuple[str, ...]], "Mapping of FastMCP component tags to required OAuth scopes."
+    ] = field(default_factory=lambda: dict(DEFAULT_TAG_SCOPE_RULES))
+    namespace_scopes: Annotated[
+        dict[str, tuple[str, ...]],
+        "Deployment-level scopes required to discover or use a namespace.",
+    ] = field(default_factory=dict)
+    namespace_linux_groups: Annotated[
+        dict[str, tuple[str, ...]], "Linux groups required to discover or use a namespace."
+    ] = field(default_factory=dict)
 
     @property
     def enabled(self) -> bool:
@@ -352,12 +398,18 @@ class MiddlewareSettings:
         response_max_bytes: Maximum serialized tool response size.
     """
 
-    enabled: bool = False
-    structured_logging: bool = True
-    include_payload_length: bool = True
-    rate_limit_per_second: float = 25.0
-    rate_limit_burst: int = 50
-    response_max_bytes: int = 1_000_000
+    enabled: Annotated[bool, "Whether production middleware should be attached automatically."] = (
+        False
+    )
+    structured_logging: Annotated[bool, "Whether request logs should be emitted as JSON."] = True
+    include_payload_length: Annotated[bool, "Whether request payload lengths should be logged."] = (
+        True
+    )
+    rate_limit_per_second: Annotated[
+        float, "Sustained request rate allowed by the token bucket."
+    ] = 25.0
+    rate_limit_burst: Annotated[int, "Maximum burst capacity allowed by the token bucket."] = 50
+    response_max_bytes: Annotated[int, "Maximum serialized tool response size."] = 1_000_000
 
     def public_snapshot(self) -> dict[str, object]:
         """Return middleware settings safe to expose through development tools.
@@ -387,11 +439,13 @@ class HttpSettings:
         stateless: Optional FastMCP stateless HTTP mode.
     """
 
-    path: str = "/mcp"
-    health_path: str = "/healthz"
-    readiness_path: str = "/readyz"
-    json_response: bool | None = None
-    stateless: bool | None = None
+    path: Annotated[str, "MCP endpoint path for HTTP-based transports."] = "/mcp"
+    health_path: Annotated[str, "Unauthenticated liveness endpoint path."] = "/healthz"
+    readiness_path: Annotated[str, "Unauthenticated dependency-readiness endpoint path."] = (
+        "/readyz"
+    )
+    json_response: Annotated[bool | None, "Optional FastMCP JSON response mode."] = None
+    stateless: Annotated[bool | None, "Optional FastMCP stateless HTTP mode."] = None
 
     def public_snapshot(self) -> dict[str, object]:
         """Return HTTP settings safe to expose through development tools.
@@ -418,6 +472,7 @@ class EnterpriseSettings:
     Attributes:
         require_auth: Whether hardened production startup requires authentication.
         multi_instance: Whether deployment runs more than one portal process.
+        require_tenant: Whether authenticated requests must include a tenant claim.
         tenant_claim: Verified token claim used for tenant partitioning.
         audit_enabled: Whether request lifecycle audit events are emitted.
         tool_timeout_seconds: Default maximum tool execution time.
@@ -433,27 +488,48 @@ class EnterpriseSettings:
         egress_destination_classifications: Maximum data classification per host.
         egress_sensitive_field_action: Whether detected values block or are redacted.
         execution_remote_classifications: Classifications requiring remote execution cells.
+        namespace_allowlist: Optional set of namespace names permitted at startup.
     """
 
-    require_auth: bool = False
-    multi_instance: bool = False
-    require_tenant: bool = False
-    tenant_claim: str = "tenant_id"
-    audit_enabled: bool = True
-    tool_timeout_seconds: float = 45.0
-    tool_timeout_overrides: dict[str, float] = field(default_factory=dict)
-    max_concurrent_requests: int = 100
-    tool_concurrency_limits: dict[str, int] = field(default_factory=dict)
-    downstream_timeout_seconds: float = 45.0
-    circuit_breaker_failure_threshold: int = 5
-    circuit_breaker_recovery_seconds: float = 30.0
-    task_max_ttl_seconds: int = 3600
-    task_max_concurrent_per_subject: int = 10
-    egress_allowed_hosts: tuple[str, ...] = ()
-    egress_destination_classifications: dict[str, str] = field(default_factory=dict)
-    egress_sensitive_field_action: str = "block"
-    execution_remote_classifications: tuple[str, ...] = ("restricted",)
-    namespace_allowlist: tuple[str, ...] = ()
+    require_auth: Annotated[
+        bool, "Whether hardened production startup requires authentication."
+    ] = False
+    multi_instance: Annotated[bool, "Whether deployment runs more than one portal process."] = False
+    require_tenant: Annotated[
+        bool, "Whether authenticated requests must include a tenant claim."
+    ] = False
+    tenant_claim: Annotated[str, "Verified token claim used for tenant partitioning."] = "tenant_id"
+    audit_enabled: Annotated[bool, "Whether request lifecycle audit events are emitted."] = True
+    tool_timeout_seconds: Annotated[float, "Default maximum tool execution time."] = 45.0
+    tool_timeout_overrides: Annotated[
+        dict[str, float], "Fully-qualified tool-specific deadline overrides."
+    ] = field(default_factory=dict)
+    max_concurrent_requests: Annotated[int, "Maximum in-process concurrent tool calls."] = 100
+    tool_concurrency_limits: Annotated[
+        dict[str, int], "Fully-qualified per-tool concurrency limits."
+    ] = field(default_factory=dict)
+    downstream_timeout_seconds: Annotated[float, "Default deadline for downstream operations."] = (
+        45.0
+    )
+    circuit_breaker_failure_threshold: Annotated[
+        int, "Consecutive failures that open a circuit."
+    ] = 5
+    circuit_breaker_recovery_seconds: Annotated[float, "Cooldown before a half-open probe."] = 30.0
+    task_max_ttl_seconds: Annotated[int, "Maximum task result retention period."] = 3600
+    task_max_concurrent_per_subject: Annotated[int, "Maximum working tasks for one owner."] = 10
+    egress_allowed_hosts: Annotated[tuple[str, ...], "Approved outbound DNS hostnames."] = ()
+    egress_destination_classifications: Annotated[
+        dict[str, str], "Maximum data classification per host."
+    ] = field(default_factory=dict)
+    egress_sensitive_field_action: Annotated[
+        str, "Whether detected values block or are redacted."
+    ] = "block"
+    execution_remote_classifications: Annotated[
+        tuple[str, ...], "Classifications requiring remote execution cells."
+    ] = ("restricted",)
+    namespace_allowlist: Annotated[
+        tuple[str, ...], "Optional set of namespace names permitted at startup."
+    ] = ()
 
     def public_snapshot(self) -> dict[str, object]:
         """Return non-secret enterprise posture metadata.
@@ -535,7 +611,7 @@ class NamespaceDiscoverySettings:
         strict: Whether namespace import failures should stop server startup.
     """
 
-    strict: bool = False
+    strict: Annotated[bool, "Whether namespace import failures should stop server startup."] = False
 
     def public_snapshot(self) -> dict[str, bool]:
         """Return namespace discovery settings safe to expose.
@@ -560,13 +636,15 @@ class ObservabilitySettings:
         pricing_version: Optional pricing table or contract version.
     """
 
-    service_name: str = "mcp-portal"
-    otlp_endpoint: str | None = None
-    metrics_enabled: bool = True
-    cost_accounting_enabled: bool = True
-    include_tenant_metrics: bool = False
-    cost_currency: str = "USD"
-    pricing_version: str | None = None
+    service_name: Annotated[str, "Service name used by OpenTelemetry launchers."] = "mcp-portal"
+    otlp_endpoint: Annotated[str | None, "Optional OTLP collector endpoint."] = None
+    metrics_enabled: Annotated[bool, "Whether runtime metrics are emitted."] = True
+    cost_accounting_enabled: Annotated[bool, "Whether detailed usage records are emitted."] = True
+    include_tenant_metrics: Annotated[
+        bool, "Whether tenant ID may be used as a metric dimension."
+    ] = False
+    cost_currency: Annotated[str, "Default currency for namespace usage records."] = "USD"
+    pricing_version: Annotated[str | None, "Optional pricing table or contract version."] = None
 
     @property
     def enabled(self) -> bool:
@@ -609,13 +687,19 @@ class DatabaseSettings:
         oracle_pool_max: Maximum Oracle checked-out connections including overflow.
     """
 
-    provider: DatabaseProviderName = "oracle"
-    sqlalchemy_url: str | None = None
-    oracle_dsn: str | None = None
-    oracle_user: str | None = None
-    oracle_password: str | None = None
-    oracle_pool_min: int = 1
-    oracle_pool_max: int = 4
+    provider: Annotated[
+        DatabaseProviderName, "Preferred database provider for portal backends."
+    ] = "oracle"
+    sqlalchemy_url: Annotated[
+        str | None, "Optional SQLAlchemy database URL for portable engines."
+    ] = None
+    oracle_dsn: Annotated[str | None, "Oracle database DSN."] = None
+    oracle_user: Annotated[str | None, "Oracle database username."] = None
+    oracle_password: Annotated[str | None, "Oracle database password."] = None
+    oracle_pool_min: Annotated[int, "SQLAlchemy pool size for Oracle engines."] = 1
+    oracle_pool_max: Annotated[
+        int, "Maximum Oracle checked-out connections including overflow."
+    ] = 4
 
     @property
     def oracle_configured(self) -> bool:
@@ -668,12 +752,14 @@ class MongoDBSettings:
         vector_search_index: Default Atlas Vector Search index name.
     """
 
-    connection_string: str | None = None
-    database_name: str | None = None
-    collections: Mapping[MongoDBCollectionName, str] = field(
-        default_factory=lambda: dict(DEFAULT_MONGODB_COLLECTIONS)
+    connection_string: Annotated[str | None, "Optional MongoDB connection URI."] = None
+    database_name: Annotated[str | None, "Optional default database for connector helpers."] = None
+    collections: Annotated[
+        Mapping[MongoDBCollectionName, str], "Hard-coded collection aliases for connector helpers."
+    ] = field(default_factory=lambda: dict(DEFAULT_MONGODB_COLLECTIONS))
+    vector_search_index: Annotated[str, "Default Atlas Vector Search index name."] = (
+        DEFAULT_MONGODB_VECTOR_INDEX
     )
-    vector_search_index: str = DEFAULT_MONGODB_VECTOR_INDEX
 
     @property
     def configured(self) -> bool:

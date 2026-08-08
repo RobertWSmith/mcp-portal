@@ -9,7 +9,7 @@ import secrets
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
-from typing import Iterator, Literal
+from typing import Annotated, Iterator, Literal
 
 from mcp_portal.errors import ConfigurationPortalError, PermissionPortalError
 from mcp_portal.security import InvocationContext, InvocationIdentity
@@ -33,14 +33,20 @@ class ExecutionCell:
         deadline_seconds: Maximum execution duration inherited from governance policy.
     """
 
-    cell_id: str
-    request_id: str
-    tool_name: str
-    namespace: str
-    identity_partition: str = field(repr=False)
-    isolation: ExecutionIsolation
-    data_classification: str
-    deadline_seconds: float
+    cell_id: Annotated[str, "Cryptographically random single-use cell identifier."]
+    request_id: Annotated[str, "Server-generated request bound to the cell."]
+    tool_name: Annotated[str, "Exact fully-qualified tool admitted into the cell."]
+    namespace: Annotated[str, "Exact namespace allowed to use invocation-bound capabilities."]
+    identity_partition: Annotated[
+        str, "Non-reversible binding to the verified authorization context."
+    ] = field(repr=False)
+    isolation: Annotated[
+        ExecutionIsolation, "In-process logical boundary or remote process/network boundary."
+    ]
+    data_classification: Annotated[str, "Namespace-owned maximum expected data classification."]
+    deadline_seconds: Annotated[
+        float, "Maximum execution duration inherited from governance policy."
+    ]
 
 
 @dataclass
@@ -53,9 +59,11 @@ class _ExecutionCellLease:
         active: Whether invocation-bound capability access is still permitted.
     """
 
-    cell: ExecutionCell
-    identity: InvocationIdentity = field(repr=False)
-    active: bool = True
+    cell: Annotated[ExecutionCell, "Immutable execution-cell identity and boundary metadata."]
+    identity: Annotated[
+        InvocationIdentity, "Verified identity retained only for exact lease validation."
+    ] = field(repr=False)
+    active: Annotated[bool, "Whether invocation-bound capability access is still permitted."] = True
 
     def close(self) -> None:
         """Permanently expire this single-use lease."""
@@ -124,11 +132,11 @@ class ExecutionCellManager:
         _partition_key: Process-local key protecting identity partition values.
     """
 
-    remote_required_classifications: frozenset[str] = field(
-        default_factory=lambda: frozenset({"restricted"})
-    )
-    _partition_key: bytes = field(
-        default_factory=lambda: secrets.token_bytes(32), compare=False, repr=False
+    remote_required_classifications: Annotated[
+        frozenset[str], "Data classifications that cannot run in process."
+    ] = field(default_factory=lambda: frozenset({"restricted"}))
+    _partition_key: Annotated[bytes, "Process-local key protecting identity partition values."] = (
+        field(default_factory=lambda: secrets.token_bytes(32), compare=False, repr=False)
     )
 
     def __post_init__(self) -> None:

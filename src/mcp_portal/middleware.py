@@ -6,7 +6,7 @@ import json
 import time
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 import anyio
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
@@ -32,11 +32,11 @@ class ToolCall:
         started: Monotonic start time.
     """
 
-    name: str
-    arguments: dict[str, Any]
-    tool: Tool
-    invocation: InvocationContext
-    started: float
+    name: Annotated[str, "Fully-qualified tool name."]
+    arguments: Annotated[dict[str, Any], "Validated invocation arguments."]
+    tool: Annotated[Tool, "Registered FastMCP tool."]
+    invocation: Annotated[InvocationContext, "Trusted invocation identity and deadline."]
+    started: Annotated[float, "Monotonic start time."]
 
 
 _current_tool_call: ContextVar[ToolCall | None] = ContextVar("mcp_portal_tool_call", default=None)

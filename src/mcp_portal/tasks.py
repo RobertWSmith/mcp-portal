@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass, replace, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol
 
 from mcp_portal.errors import PermissionPortalError, ValidationPortalError
 
@@ -26,13 +26,25 @@ class PortalTask:
         result: Optional terminal or intermediate result.
     """
 
-    task_id: str = field(metadata={"description": "Cryptographically random opaque identifier."})
-    owner: str = field(metadata={"description": "Authenticated task owner."})
-    tenant_id: str | None = field(metadata={"description": "Trusted tenant partition."})
-    status: TaskStatus = field(metadata={"description": "Current task lifecycle state."})
-    created_at: datetime = field(metadata={"description": "UTC creation timestamp."})
-    expires_at: datetime = field(metadata={"description": "UTC retention deadline."})
-    result: Any = field(
+    task_id: Annotated[str, "Cryptographically random opaque identifier."] = field(
+        metadata={"description": "Cryptographically random opaque identifier."}
+    )
+    owner: Annotated[str, "Authenticated task owner."] = field(
+        metadata={"description": "Authenticated task owner."}
+    )
+    tenant_id: Annotated[str | None, "Trusted tenant partition."] = field(
+        metadata={"description": "Trusted tenant partition."}
+    )
+    status: Annotated[TaskStatus, "Current task lifecycle state."] = field(
+        metadata={"description": "Current task lifecycle state."}
+    )
+    created_at: Annotated[datetime, "UTC creation timestamp."] = field(
+        metadata={"description": "UTC creation timestamp."}
+    )
+    expires_at: Annotated[datetime, "UTC retention deadline."] = field(
+        metadata={"description": "UTC retention deadline."}
+    )
+    result: Annotated[Any, "Optional terminal or intermediate result."] = field(
         default=None, metadata={"description": "Optional terminal or intermediate result."}
     )
 

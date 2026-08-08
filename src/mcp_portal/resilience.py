@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Protocol, TypeVar
+from typing import Annotated, Any, Protocol, TypeVar
 
 import anyio
 
@@ -44,8 +44,12 @@ class _Bucket:
         updated_at: Monotonic timestamp of the last refill.
     """
 
-    tokens: float = field(metadata={"description": "Currently available units."})
-    updated_at: float = field(metadata={"description": "Monotonic timestamp of the last refill."})
+    tokens: Annotated[float, "Currently available units."] = field(
+        metadata={"description": "Currently available units."}
+    )
+    updated_at: Annotated[float, "Monotonic timestamp of the last refill."] = field(
+        metadata={"description": "Monotonic timestamp of the last refill."}
+    )
 
 
 class MemoryQuotaBackend:

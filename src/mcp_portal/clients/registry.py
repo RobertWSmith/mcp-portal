@@ -7,7 +7,7 @@ import inspect
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 from mcp_portal.config import Settings
 from mcp_portal.errors import ConfigurationPortalError, TimeoutPortalError, UpstreamPortalError
@@ -25,15 +25,34 @@ class ClientFactories:
     Attributes:
         factories: Mapping from client names to zero-argument factories.
         shared_factories: Client names whose created objects are reused until shutdown.
+        readiness_checks: Dependency names mapped to readiness probe callables.
+        circuit_breakers: Circuit-breaker registry protecting downstream operations.
+        downstream_timeout_seconds: Default deadline for downstream operations.
+        telemetry: Recorder for downstream latency and outcome measurements.
+        _shared_clients: Cached lifecycle-managed client instances.
     """
 
-    factories: Mapping[str, ClientFactory] = field(default_factory=dict)
-    shared_factories: frozenset[str] = field(default_factory=frozenset)
-    readiness_checks: Mapping[str, ReadinessCheck] = field(default_factory=dict)
-    circuit_breakers: CircuitBreakerRegistry = field(default_factory=CircuitBreakerRegistry)
-    downstream_timeout_seconds: float = 45.0
-    telemetry: TelemetryRecorder = field(default_factory=OpenTelemetryRecorder)
-    _shared_clients: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    factories: Annotated[
+        Mapping[str, ClientFactory], "Mapping from client names to zero-argument factories."
+    ] = field(default_factory=dict)
+    shared_factories: Annotated[
+        frozenset[str], "Client names whose created objects are reused until shutdown."
+    ] = field(default_factory=frozenset)
+    readiness_checks: Annotated[
+        Mapping[str, ReadinessCheck], "Dependency names mapped to readiness probe callables."
+    ] = field(default_factory=dict)
+    circuit_breakers: Annotated[
+        CircuitBreakerRegistry, "Circuit-breaker registry protecting downstream operations."
+    ] = field(default_factory=CircuitBreakerRegistry)
+    downstream_timeout_seconds: Annotated[float, "Default deadline for downstream operations."] = (
+        45.0
+    )
+    telemetry: Annotated[
+        TelemetryRecorder, "Recorder for downstream latency and outcome measurements."
+    ] = field(default_factory=OpenTelemetryRecorder)
+    _shared_clients: Annotated[dict[str, Any], "Cached lifecycle-managed client instances."] = (
+        field(default_factory=dict, init=False, repr=False)
+    )
 
     def __post_init__(self) -> None:
         """Normalize factory mappings after dataclass initialization."""

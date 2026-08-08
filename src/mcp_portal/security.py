@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken
@@ -30,16 +30,26 @@ class InvocationIdentity:
         principal_type: Anonymous, delegated user, or application identity.
     """
 
-    subject: str | None = None
-    tenant_id: str | None = None
-    client_id: str | None = None
-    scopes: frozenset[str] = field(default_factory=frozenset)
-    roles: frozenset[str] = field(default_factory=frozenset)
-    linux_groups: frozenset[str] = field(default_factory=frozenset)
-    auth_method: str = "anonymous"
-    auth_methods: frozenset[str] = field(default_factory=frozenset)
-    issuer: str | None = None
-    principal_type: str = "anonymous"
+    subject: Annotated[str | None, "Human or workload subject identifier."] = None
+    tenant_id: Annotated[str | None, "Trusted tenant partition identifier."] = None
+    client_id: Annotated[str | None, "OAuth client application identifier."] = None
+    scopes: Annotated[frozenset[str], "Verified authorization scopes."] = field(
+        default_factory=frozenset
+    )
+    roles: Annotated[frozenset[str], "Verified application roles mapped from the access token."] = (
+        field(default_factory=frozenset)
+    )
+    linux_groups: Annotated[
+        frozenset[str], "Linux/NSS groups resolved for the verified subject."
+    ] = field(default_factory=frozenset)
+    auth_method: Annotated[str, "Authentication method metadata."] = "anonymous"
+    auth_methods: Annotated[frozenset[str], "Structured authentication-method references."] = field(
+        default_factory=frozenset
+    )
+    issuer: Annotated[str | None, "Verified token issuer."] = None
+    principal_type: Annotated[str, "Anonymous, delegated user, or application identity."] = (
+        "anonymous"
+    )
 
 
 @dataclass(frozen=True)
@@ -53,10 +63,10 @@ class InvocationContext:
         deadline_seconds: Maximum execution duration.
     """
 
-    request_id: str
-    tool_name: str
-    identity: InvocationIdentity
-    deadline_seconds: float
+    request_id: Annotated[str, "Server-generated correlation identifier."]
+    tool_name: Annotated[str, "Fully-qualified mounted tool name."]
+    identity: Annotated[InvocationIdentity, "Verified caller identity."]
+    deadline_seconds: Annotated[float, "Maximum execution duration."]
 
 
 _invocation_context: contextvars.ContextVar[InvocationContext | None] = contextvars.ContextVar(

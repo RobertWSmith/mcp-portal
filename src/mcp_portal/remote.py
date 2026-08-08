@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import Client, FastMCP
 from fastmcp.server.providers.proxy import ProxyProvider
@@ -21,8 +21,12 @@ class RemoteNamespaceProvider:
         cache_ttl_seconds: Duration for caching the remote component catalog.
     """
 
-    client_factory: Callable[[], Client[Any]]
-    cache_ttl_seconds: float | None = 300.0
+    client_factory: Annotated[
+        Callable[[], Client[Any]], "Factory creating an authenticated FastMCP client."
+    ]
+    cache_ttl_seconds: Annotated[
+        float | None, "Duration for caching the remote component catalog."
+    ] = 300.0
 
     @classmethod
     def from_transport(

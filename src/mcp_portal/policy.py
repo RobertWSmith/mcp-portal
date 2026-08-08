@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
 from fastmcp.tools import Tool
 
@@ -23,11 +23,15 @@ class PolicyDecision:
         required_linux_groups: Linux groups evaluated by the decision.
     """
 
-    allowed: bool
-    reason: str
-    required_scopes: frozenset[str] = field(default_factory=frozenset)
-    obligations: tuple[str, ...] = ()
-    required_linux_groups: frozenset[str] = field(default_factory=frozenset)
+    allowed: Annotated[bool, "Whether execution may proceed."]
+    reason: Annotated[str, "Stable human-readable decision reason."]
+    required_scopes: Annotated[frozenset[str], "Scopes evaluated by the decision."] = field(
+        default_factory=frozenset
+    )
+    obligations: Annotated[tuple[str, ...], "Additional controls required during execution."] = ()
+    required_linux_groups: Annotated[frozenset[str], "Linux groups evaluated by the decision."] = (
+        field(default_factory=frozenset)
+    )
 
 
 class PolicyEngine(Protocol):

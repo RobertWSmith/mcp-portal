@@ -9,7 +9,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.types import Annotations, Icon, ToolAnnotations
 
@@ -66,20 +66,24 @@ class NamespaceContext:
         clients: Registry of external client factories.
         clock: Time provider used by tools and tests.
         audit: Append-only audit destination.
+        egress: Policy boundary for approved outbound requests.
+        credentials: Broker for audience-bound outbound credentials.
+        tasks: Store for namespace-owned asynchronous task results.
+        telemetry: Recorder for usage, cost, and runtime metrics.
     """
 
-    name: str
-    data_classification: str
-    settings: Settings
-    logger: logging.Logger
-    redactor: Redactor
-    clients: ClientFactories
-    clock: Clock
-    audit: AuditSink
-    egress: EgressPolicy
-    credentials: CredentialBroker
-    tasks: TaskStore
-    telemetry: TelemetryRecorder
+    name: Annotated[str, "Namespace prefix used when mounting provider components."]
+    data_classification: Annotated[str, "Namespace-owned lower bound for outbound data."]
+    settings: Annotated[Settings, "Shared runtime settings."]
+    logger: Annotated[logging.Logger, "Logger scoped to this namespace."]
+    redactor: Annotated[Redactor, "Redactor used before exposing diagnostics."]
+    clients: Annotated[ClientFactories, "Registry of external client factories."]
+    clock: Annotated[Clock, "Time provider used by tools and tests."]
+    audit: Annotated[AuditSink, "Append-only audit destination."]
+    egress: Annotated[EgressPolicy, "Policy boundary for approved outbound requests."]
+    credentials: Annotated[CredentialBroker, "Broker for audience-bound outbound credentials."]
+    tasks: Annotated[TaskStore, "Store for namespace-owned asynchronous task results."]
+    telemetry: Annotated[TelemetryRecorder, "Recorder for usage, cost, and runtime metrics."]
 
     def now(self) -> datetime:
         """Return the current time from the namespace clock.
@@ -298,14 +302,16 @@ class ToolContribution:
         structured_output: Optional structured-output override.
     """
 
-    function: Callable[..., Any]
-    name: str | None = None
-    title: str | None = None
-    description: str | None = None
-    annotations: ToolAnnotations | None = None
-    icons: tuple[Icon, ...] = ()
-    meta: Mapping[str, Any] = field(default_factory=dict)
-    structured_output: bool | None = None
+    function: Annotated[Callable[..., Any], "Callable implementing the tool."]
+    name: Annotated[str | None, "Optional unqualified MCP tool name."] = None
+    title: Annotated[str | None, "Optional human-readable title."] = None
+    description: Annotated[str | None, "Optional public description."] = None
+    annotations: Annotated[ToolAnnotations | None, "Standard MCP tool behavior hints."] = None
+    icons: Annotated[tuple[Icon, ...], "Optional client-display icons."] = ()
+    meta: Annotated[Mapping[str, Any], "Portal-specific governance metadata."] = field(
+        default_factory=dict
+    )
+    structured_output: Annotated[bool | None, "Optional structured-output override."] = None
 
 
 @dataclass(frozen=True)
@@ -324,15 +330,17 @@ class ResourceContribution:
         meta: Portal-specific governance metadata.
     """
 
-    function: Callable[..., Any]
-    uri: str
-    name: str | None = None
-    title: str | None = None
-    description: str | None = None
-    mime_type: str | None = None
-    icons: tuple[Icon, ...] = ()
-    annotations: Annotations | None = None
-    meta: Mapping[str, Any] = field(default_factory=dict)
+    function: Annotated[Callable[..., Any], "Callable that reads or renders the resource."]
+    uri: Annotated[str, "Stable resource URI or URI template."]
+    name: Annotated[str | None, "Optional unqualified display name."] = None
+    title: Annotated[str | None, "Optional human-readable title."] = None
+    description: Annotated[str | None, "Optional public description."] = None
+    mime_type: Annotated[str | None, "Optional content MIME type."] = None
+    icons: Annotated[tuple[Icon, ...], "Optional client-display icons."] = ()
+    annotations: Annotated[Annotations | None, "Standard MCP resource hints."] = None
+    meta: Annotated[Mapping[str, Any], "Portal-specific governance metadata."] = field(
+        default_factory=dict
+    )
 
     @property
     def is_template(self) -> bool:
@@ -356,11 +364,11 @@ class PromptContribution:
         icons: Optional client-display icons.
     """
 
-    function: Callable[..., Any]
-    name: str | None = None
-    title: str | None = None
-    description: str | None = None
-    icons: tuple[Icon, ...] = ()
+    function: Annotated[Callable[..., Any], "Callable that renders the prompt."]
+    name: Annotated[str | None, "Optional unqualified MCP prompt name."] = None
+    title: Annotated[str | None, "Optional human-readable title."] = None
+    description: Annotated[str | None, "Optional public description."] = None
+    icons: Annotated[tuple[Icon, ...], "Optional client-display icons."] = ()
 
 
 class NamespaceProvider:
@@ -570,9 +578,11 @@ class NamespaceStatus:
         details: Optional redacted-safe diagnostic details.
     """
 
-    state: NamespaceState
-    message: str
-    details: Mapping[str, Any] = field(default_factory=dict)
+    state: Annotated[NamespaceState, "Machine-readable namespace state."]
+    message: Annotated[str, "Human-readable status summary."]
+    details: Annotated[Mapping[str, Any], "Optional redacted-safe diagnostic details."] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         """Normalize status details after dataclass initialization."""
@@ -604,22 +614,41 @@ class Namespace:
         description: Human-readable namespace purpose.
         tags: Stable metadata tags for filtering and documentation.
         health_check: Optional callback that reports namespace status.
+        owner: Owning team or service.
+        version: Namespace contract version.
+        maturity: Namespace lifecycle maturity.
+        data_classification: Highest expected data classification.
+        required_scopes: Code-owned baseline access scopes.
+        timeout_seconds: Optional namespace timeout metadata.
+        dependencies: Registered external dependency names.
+        deprecation_date: Optional planned deprecation date.
+        replacement: Optional replacement namespace name.
     """
 
-    name: str
-    create: NamespaceFactory
-    description: str = ""
-    tags: frozenset[str] = field(default_factory=frozenset)
-    health_check: NamespaceHealthCheck | None = None
-    owner: str = "platform"
-    version: str = "1.0.0"
-    maturity: Literal["experimental", "beta", "stable", "deprecated"] = "stable"
-    data_classification: str = "internal"
-    required_scopes: frozenset[str] = field(default_factory=frozenset)
-    timeout_seconds: float | None = None
-    dependencies: tuple[str, ...] = ()
-    deprecation_date: str | None = None
-    replacement: str | None = None
+    name: Annotated[str, "Prefix used when mounting the namespace into the parent server."]
+    create: Annotated[
+        NamespaceFactory, "Factory that builds the namespace child server from shared context."
+    ]
+    description: Annotated[str, "Human-readable namespace purpose."] = ""
+    tags: Annotated[frozenset[str], "Stable metadata tags for filtering and documentation."] = (
+        field(default_factory=frozenset)
+    )
+    health_check: Annotated[
+        NamespaceHealthCheck | None, "Optional callback that reports namespace status."
+    ] = None
+    owner: Annotated[str, "Owning team or service."] = "platform"
+    version: Annotated[str, "Namespace contract version."] = "1.0.0"
+    maturity: Annotated[
+        Literal["experimental", "beta", "stable", "deprecated"], "Namespace lifecycle maturity."
+    ] = "stable"
+    data_classification: Annotated[str, "Highest expected data classification."] = "internal"
+    required_scopes: Annotated[frozenset[str], "Code-owned baseline access scopes."] = field(
+        default_factory=frozenset
+    )
+    timeout_seconds: Annotated[float | None, "Optional namespace timeout metadata."] = None
+    dependencies: Annotated[tuple[str, ...], "Registered external dependency names."] = ()
+    deprecation_date: Annotated[str | None, "Optional planned deprecation date."] = None
+    replacement: Annotated[str | None, "Optional replacement namespace name."] = None
 
     def __post_init__(self) -> None:
         """Normalize namespace metadata after dataclass initialization."""
@@ -650,19 +679,25 @@ class NamespaceMetadata:
         replacement: Optional replacement namespace name.
     """
 
-    name: str
-    description: str = ""
-    tags: frozenset[str] = field(default_factory=frozenset)
-    health_check: NamespaceHealthCheck | None = None
-    owner: str = "platform"
-    version: str = "1.0.0"
-    maturity: Literal["experimental", "beta", "stable", "deprecated"] = "stable"
-    data_classification: str = "internal"
-    required_scopes: frozenset[str] = field(default_factory=frozenset)
-    timeout_seconds: float | None = None
-    dependencies: tuple[str, ...] = ()
-    deprecation_date: str | None = None
-    replacement: str | None = None
+    name: Annotated[str, "Prefix used when mounting the namespace."]
+    description: Annotated[str, "Human-readable namespace purpose."] = ""
+    tags: Annotated[frozenset[str], "Stable metadata tags."] = field(default_factory=frozenset)
+    health_check: Annotated[NamespaceHealthCheck | None, "Optional namespace health callback."] = (
+        None
+    )
+    owner: Annotated[str, "Owning team or service."] = "platform"
+    version: Annotated[str, "Namespace contract version."] = "1.0.0"
+    maturity: Annotated[
+        Literal["experimental", "beta", "stable", "deprecated"], "Namespace lifecycle maturity."
+    ] = "stable"
+    data_classification: Annotated[str, "Highest expected data classification."] = "internal"
+    required_scopes: Annotated[frozenset[str], "Code-owned baseline access scopes."] = field(
+        default_factory=frozenset
+    )
+    timeout_seconds: Annotated[float | None, "Optional namespace timeout metadata."] = None
+    dependencies: Annotated[tuple[str, ...], "Registered external dependency names."] = ()
+    deprecation_date: Annotated[str | None, "Optional planned deprecation date."] = None
+    replacement: Annotated[str | None, "Optional replacement namespace name."] = None
 
     def __post_init__(self) -> None:
         """Normalize iterable metadata after dataclass initialization."""
@@ -680,8 +715,8 @@ class NamespaceRuntime:
         context: Runtime context built for the namespace.
     """
 
-    namespace: Namespace
-    context: NamespaceContext
+    namespace: Annotated[Namespace, "Namespace manifest."]
+    context: Annotated[NamespaceContext, "Runtime context built for the namespace."]
 
 
 _NAMESPACE_REGISTRY: dict[str, Namespace] = {}

@@ -9,7 +9,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol
 from urllib.parse import SplitResult, urlsplit
 
 from mcp_portal.errors import PermissionPortalError, ValidationPortalError
@@ -68,12 +68,18 @@ class EgressRequest:
         credential_audience: Optional HTTPS audience for downstream token exchange.
     """
 
-    destination: str
-    purpose: str
-    method: str = "POST"
-    payload: Any = field(default=None, repr=False)
-    data_classification: DataClassification | None = None
-    credential_audience: str | None = None
+    destination: Annotated[str, "Exact HTTPS URL receiving the request."]
+    purpose: Annotated[str, "Stable low-cardinality purpose identifier for policy and audit."]
+    method: Annotated[str, "Intended HTTP operation."] = "POST"
+    payload: Annotated[Any, "Structured outbound payload inspected before execution."] = field(
+        default=None, repr=False
+    )
+    data_classification: Annotated[
+        DataClassification | None, "Optional caller-declared classification that may only"
+    ] = None
+    credential_audience: Annotated[
+        str | None, "Optional HTTPS audience for downstream token exchange."
+    ] = None
 
 
 @dataclass(frozen=True)
@@ -87,10 +93,12 @@ class PayloadInspection:
         payload_digest: SHA-256 digest of the original canonicalized payload.
     """
 
-    payload: Any = field(repr=False)
-    detected_classification: DataClassification
-    findings: tuple[str, ...]
-    payload_digest: str
+    payload: Annotated[Any, "Copy with detected sensitive values redacted."] = field(repr=False)
+    detected_classification: Annotated[
+        DataClassification, "Highest classification found before redaction."
+    ]
+    findings: Annotated[tuple[str, ...], "Stable labels describing detected sensitive data types."]
+    payload_digest: Annotated[str, "SHA-256 digest of the original canonicalized payload."]
 
 
 class PayloadInspector(Protocol):
@@ -123,7 +131,9 @@ class StructuredPayloadInspector:
         redactor: Redactor containing deployment-known literal secrets.
     """
 
-    redactor: Redactor = field(default_factory=Redactor)
+    redactor: Annotated[Redactor, "Redactor containing deployment-known literal secrets."] = field(
+        default_factory=Redactor
+    )
 
     def inspect(
         self, payload: Any, minimum_classification: DataClassification
@@ -254,19 +264,27 @@ class EgressDecision:
         credential_audience: Normalized same-origin credential audience.
     """
 
-    allowed: bool
-    reason: str
-    destination: str
-    host: str
-    method: str
-    purpose: str
-    data_classification: DataClassification
-    detected_classification: DataClassification
-    destination_max_classification: DataClassification
-    payload_digest: str
-    findings: tuple[str, ...]
-    payload: Any = field(repr=False)
-    credential_audience: str | None = None
+    allowed: Annotated[bool, "Whether downstream execution may proceed."]
+    reason: Annotated[str, "Stable policy decision reason."]
+    destination: Annotated[str, "Normalized HTTPS destination."]
+    host: Annotated[str, "Normalized destination hostname."]
+    method: Annotated[str, "Normalized HTTP operation."]
+    purpose: Annotated[str, "Validated low-cardinality purpose identifier."]
+    data_classification: Annotated[
+        DataClassification, "Classification of the payload actually sent."
+    ]
+    detected_classification: Annotated[
+        DataClassification, "Highest classification detected before redaction."
+    ]
+    destination_max_classification: Annotated[
+        DataClassification, "Maximum classification allowed by the host."
+    ]
+    payload_digest: Annotated[str, "Digest of the original payload for audit correlation."]
+    findings: Annotated[tuple[str, ...], "Stable sensitive-data labels containing no raw values."]
+    payload: Annotated[Any, "Sanitized payload supplied only to an approved operation."] = field(
+        repr=False
+    )
+    credential_audience: Annotated[str | None, "Normalized same-origin credential audience."] = None
 
 
 @dataclass(frozen=True)
@@ -283,13 +301,15 @@ class ApprovedEgress:
         credential: Optional broker-issued same-origin credential.
     """
 
-    destination: str
-    method: str
-    purpose: str
-    data_classification: DataClassification
-    payload_digest: str
-    payload: Any = field(repr=False)
-    credential: str | None = field(default=None, repr=False)
+    destination: Annotated[str, "Normalized HTTPS destination."]
+    method: Annotated[str, "Normalized HTTP operation."]
+    purpose: Annotated[str, "Validated outbound purpose."]
+    data_classification: Annotated[DataClassification, "Classification of the released payload."]
+    payload_digest: Annotated[str, "Digest of the original payload."]
+    payload: Annotated[Any, "Sanitized structured payload."] = field(repr=False)
+    credential: Annotated[str | None, "Optional broker-issued same-origin credential."] = field(
+        default=None, repr=False
+    )
 
 
 @dataclass(frozen=True)
@@ -304,21 +324,27 @@ class EgressPolicy:
         inspector: Structured DLP adapter.
     """
 
-    allowed_hosts: frozenset[str] = field(
+    allowed_hosts: Annotated[frozenset[str], "Exact DNS hostname allowlist."] = field(
         default=frozenset(), metadata={"description": "Exact DNS hostname allowlist."}
     )
-    destination_classifications: Mapping[str, DataClassification] = field(
+    destination_classifications: Annotated[
+        Mapping[str, DataClassification], "Maximum data classification accepted per host."
+    ] = field(
         default_factory=dict,
-        metadata={"description": "Maximum outbound data classification per hostname."},
+        metadata={"description": "Maximum data classification accepted per host."},
     )
-    sensitive_field_action: SensitiveFieldAction = "block"
-    allow_private_networks: bool = field(
+    sensitive_field_action: Annotated[
+        SensitiveFieldAction, "Whether findings block the call or are redacted."
+    ] = "block"
+    allow_private_networks: Annotated[
+        bool, "Whether literal private IP destinations are permitted."
+    ] = field(
         default=False,
         metadata={"description": "Whether literal private IP destinations are permitted."},
     )
-    inspector: PayloadInspector = field(
+    inspector: Annotated[PayloadInspector, "Structured DLP adapter."] = field(
         default_factory=StructuredPayloadInspector,
-        metadata={"description": "Structured outbound payload inspector."},
+        metadata={"description": "Structured DLP adapter."},
         compare=False,
         repr=False,
     )
@@ -566,12 +592,9 @@ def _canonical_payload(value: Any) -> Any:
         }
     if isinstance(value, Mapping):
         items = [
-            [_canonical_payload(key), _canonical_payload(child)]
-            for key, child in value.items()
+            [_canonical_payload(key), _canonical_payload(child)] for key, child in value.items()
         ]
-        items.sort(
-            key=lambda item: json.dumps(item[0], sort_keys=True, separators=(",", ":"))
-        )
+        items.sort(key=lambda item: json.dumps(item[0], sort_keys=True, separators=(",", ":")))
         return {"type": "mapping", "items": items}
     if isinstance(value, list):
         return {"type": "list", "items": [_canonical_payload(child) for child in value]}

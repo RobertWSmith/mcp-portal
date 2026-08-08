@@ -7,7 +7,7 @@ import json
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
 from mcp_portal.policy import PolicyDecision
 from mcp_portal.security import InvocationContext
@@ -43,60 +43,92 @@ class AuditEvent:
         execution_isolation: Optional in-process or remote isolation boundary.
     """
 
-    occurred_at: str = field(metadata={"description": "UTC event timestamp."})
-    event: str = field(metadata={"description": "Lifecycle event type."})
-    request_id: str = field(metadata={"description": "Server-generated correlation identifier."})
-    tool_name: str = field(metadata={"description": "Fully-qualified tool name."})
-    subject: str | None = field(
+    occurred_at: Annotated[str, "UTC event timestamp."] = field(
+        metadata={"description": "UTC event timestamp."}
+    )
+    event: Annotated[str, "Lifecycle event type."] = field(
+        metadata={"description": "Lifecycle event type."}
+    )
+    request_id: Annotated[str, "Server-generated correlation identifier."] = field(
+        metadata={"description": "Server-generated correlation identifier."}
+    )
+    tool_name: Annotated[str, "Fully-qualified tool name."] = field(
+        metadata={"description": "Fully-qualified tool name."}
+    )
+    subject: Annotated[str | None, "Authenticated human or workload subject."] = field(
         metadata={"description": "Authenticated human or workload subject."}
     )
-    tenant_id: str | None = field(metadata={"description": "Trusted tenant partition."})
-    client_id: str | None = field(metadata={"description": "Calling OAuth client identifier."})
-    argument_digest: str = field(
+    tenant_id: Annotated[str | None, "Trusted tenant partition."] = field(
+        metadata={"description": "Trusted tenant partition."}
+    )
+    client_id: Annotated[str | None, "Calling OAuth client identifier."] = field(
+        metadata={"description": "Calling OAuth client identifier."}
+    )
+    argument_digest: Annotated[str, "SHA-256 digest of canonicalized arguments."] = field(
         metadata={"description": "SHA-256 digest of canonicalized arguments."}
     )
-    allowed: bool | None = field(
+    allowed: Annotated[bool | None, "Optional authorization result."] = field(
         default=None, metadata={"description": "Optional authorization result."}
     )
-    reason: str | None = field(default=None, metadata={"description": "Optional policy reason."})
-    outcome: str | None = field(
+    reason: Annotated[str | None, "Optional policy reason."] = field(
+        default=None, metadata={"description": "Optional policy reason."}
+    )
+    outcome: Annotated[str | None, "Optional completion outcome."] = field(
         default=None, metadata={"description": "Optional completion outcome."}
     )
-    duration_ms: float | None = field(
+    duration_ms: Annotated[float | None, "Optional execution duration."] = field(
         default=None, metadata={"description": "Optional execution duration."}
     )
-    destination_host: str | None = field(
+    destination_host: Annotated[str | None, "Optional normalized outbound hostname."] = field(
         default=None, metadata={"description": "Optional normalized outbound hostname."}
     )
-    egress_method: str | None = field(
-        default=None, metadata={"description": "Optional outbound HTTP method."}
+    egress_method: Annotated[str | None, "Optional normalized outbound HTTP method."] = field(
+        default=None, metadata={"description": "Optional normalized outbound HTTP method."}
     )
-    data_classification: str | None = field(
-        default=None, metadata={"description": "Optional outbound data classification."}
+    data_classification: Annotated[
+        str | None, "Optional classification of released outbound data."
+    ] = field(
+        default=None, metadata={"description": "Optional classification of released outbound data."}
     )
-    detected_classification: str | None = field(
-        default=None, metadata={"description": "Optional detected data classification."}
+    detected_classification: Annotated[
+        str | None, "Optional classification detected before redaction."
+    ] = field(
+        default=None, metadata={"description": "Optional classification detected before redaction."}
     )
-    destination_max_classification: str | None = field(
+    destination_max_classification: Annotated[
+        str | None, "Optional destination classification ceiling."
+    ] = field(
         default=None, metadata={"description": "Optional destination classification ceiling."}
     )
-    payload_digest: str | None = field(
-        default=None, metadata={"description": "Optional outbound payload digest."}
+    payload_digest: Annotated[str | None, "Optional digest of the original outbound payload."] = (
+        field(
+            default=None,
+            metadata={"description": "Optional digest of the original outbound payload."},
+        )
     )
-    findings: tuple[str, ...] = field(
-        default=(), metadata={"description": "Stable outbound DLP finding labels."}
+    findings: Annotated[
+        tuple[str, ...], "Optional stable DLP finding labels without sensitive values."
+    ] = field(
+        default=(),
+        metadata={"description": "Optional stable DLP finding labels without sensitive values."},
     )
-    purpose: str | None = field(
+    purpose: Annotated[str | None, "Optional low-cardinality outbound purpose."] = field(
         default=None, metadata={"description": "Optional low-cardinality outbound purpose."}
     )
-    execution_cell_id: str | None = field(
-        default=None, metadata={"description": "Optional single-use execution-cell identifier."}
+    execution_cell_id: Annotated[str | None, "Optional single-use execution-cell identifier."] = (
+        field(
+            default=None, metadata={"description": "Optional single-use execution-cell identifier."}
+        )
     )
-    execution_cell_namespace: str | None = field(
-        default=None, metadata={"description": "Optional execution-cell namespace."}
+    execution_cell_namespace: Annotated[
+        str | None, "Optional namespace bound to the execution cell."
+    ] = field(
+        default=None, metadata={"description": "Optional namespace bound to the execution cell."}
     )
-    execution_isolation: str | None = field(
-        default=None, metadata={"description": "Optional execution-cell isolation boundary."}
+    execution_isolation: Annotated[
+        str | None, "Optional in-process or remote isolation boundary."
+    ] = field(
+        default=None, metadata={"description": "Optional in-process or remote isolation boundary."}
     )
 
 
@@ -123,32 +155,47 @@ class AuditDetails:
         execution_isolation: Optional in-process or remote isolation boundary.
     """
 
-    decision: PolicyDecision | None = field(
+    decision: Annotated[PolicyDecision | None, "Optional authorization decision."] = field(
         default=None, metadata={"description": "Optional authorization decision."}
     )
-    allowed: bool | None = field(
-        default=None, metadata={"description": "Optional direct policy result."}
+    allowed: Annotated[
+        bool | None, "Optional direct policy result when no `PolicyDecision` is used."
+    ] = field(
+        default=None,
+        metadata={"description": "Optional direct policy result when no `PolicyDecision` is used."},
     )
-    reason: str | None = field(
-        default=None, metadata={"description": "Optional direct policy reason."}
+    reason: Annotated[str | None, "Optional direct policy decision reason."] = field(
+        default=None, metadata={"description": "Optional direct policy decision reason."}
     )
-    outcome: str | None = field(
+    outcome: Annotated[str | None, "Optional completion outcome."] = field(
         default=None, metadata={"description": "Optional completion outcome."}
     )
-    duration_ms: float | None = field(
+    duration_ms: Annotated[float | None, "Optional execution duration."] = field(
         default=None, metadata={"description": "Optional execution duration."}
     )
-    destination_host: str | None = None
-    egress_method: str | None = None
-    data_classification: str | None = None
-    detected_classification: str | None = None
-    destination_max_classification: str | None = None
-    payload_digest: str | None = None
-    findings: tuple[str, ...] = ()
-    purpose: str | None = None
-    execution_cell_id: str | None = None
-    execution_cell_namespace: str | None = None
-    execution_isolation: str | None = None
+    destination_host: Annotated[str | None, "Optional normalized outbound hostname."] = None
+    egress_method: Annotated[str | None, "Optional outbound HTTP method."] = None
+    data_classification: Annotated[
+        str | None, "Optional classification of released outbound data."
+    ] = None
+    detected_classification: Annotated[
+        str | None, "Optional classification detected before redaction."
+    ] = None
+    destination_max_classification: Annotated[
+        str | None, "Optional destination classification ceiling."
+    ] = None
+    payload_digest: Annotated[str | None, "Optional outbound payload digest."] = None
+    findings: Annotated[tuple[str, ...], "Stable DLP finding labels without sensitive values."] = ()
+    purpose: Annotated[str | None, "Optional low-cardinality outbound purpose."] = None
+    execution_cell_id: Annotated[str | None, "Optional single-use execution-cell identifier."] = (
+        None
+    )
+    execution_cell_namespace: Annotated[
+        str | None, "Optional namespace bound to the execution cell."
+    ] = None
+    execution_isolation: Annotated[
+        str | None, "Optional in-process or remote isolation boundary."
+    ] = None
 
 
 class AuditSink(Protocol):

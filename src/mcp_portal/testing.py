@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from typing import Annotated
 
 from fastmcp import Client
 
@@ -52,21 +53,27 @@ class SettingsOverrides:
         health_enabled: Whether the health namespace mounts.
     """
 
-    model_provider: ModelProviderName = "openai"
-    openai_api_key: str | None = "test-key"
-    large_model: str = "large-model"
-    small_model: str = "small-model"
-    embedding_model: str = "embedding-model"
-    azure_openai_endpoint: str | None = None
-    azure_openai_api_version: str | None = None
-    azure_openai_token_scope: str | None = None
-    azure_large_model_deployment: str | None = None
-    azure_small_model_deployment: str | None = None
-    azure_embedding_model_deployment: str | None = None
-    azure_tenant_id: str | None = None
-    azure_client_id: str | None = None
-    azure_client_secret: str | None = None
-    health_enabled: bool = True
+    model_provider: Annotated[ModelProviderName, "Active test model provider."] = "openai"
+    openai_api_key: Annotated[str | None, "Optional test OpenAI API key."] = "test-key"
+    large_model: Annotated[str, "Test large language model name."] = "large-model"
+    small_model: Annotated[str, "Test small language model name."] = "small-model"
+    embedding_model: Annotated[str, "Test embedding model name."] = "embedding-model"
+    azure_openai_endpoint: Annotated[str | None, "Optional Azure OpenAI endpoint."] = None
+    azure_openai_api_version: Annotated[str | None, "Optional Azure OpenAI API version."] = None
+    azure_openai_token_scope: Annotated[str | None, "Optional Azure OpenAI token scope."] = None
+    azure_large_model_deployment: Annotated[
+        str | None, "Optional Azure large model deployment."
+    ] = None
+    azure_small_model_deployment: Annotated[
+        str | None, "Optional Azure small model deployment."
+    ] = None
+    azure_embedding_model_deployment: Annotated[
+        str | None, "Optional Azure embedding deployment."
+    ] = None
+    azure_tenant_id: Annotated[str | None, "Optional Azure tenant id."] = None
+    azure_client_id: Annotated[str | None, "Optional Azure client id."] = None
+    azure_client_secret: Annotated[str | None, "Optional Azure client secret."] = None
+    health_enabled: Annotated[bool, "Whether the health namespace mounts."] = True
 
 
 def create_test_settings(overrides: SettingsOverrides | None = None) -> Settings:

@@ -9,7 +9,7 @@ import json
 import logging
 import warnings
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 from langchain_core.load.dump import dumps
 from langchain_core.load.load import loads
@@ -45,18 +45,24 @@ class TenantScope:
             authorization context and current tool.
     """
 
-    tenant_id: str | None = field(metadata={"description": "Verified external tenant identifier."})
-    subject: str | None = field(metadata={"description": "Verified human or workload subject."})
-    client_id: str | None = field(metadata={"description": "Verified calling client identifier."})
-    partition: str = field(
+    tenant_id: Annotated[str | None, "Verified external tenant identifier."] = field(
+        metadata={"description": "Verified external tenant identifier."}
+    )
+    subject: Annotated[str | None, "Verified human or workload subject."] = field(
+        metadata={"description": "Verified human or workload subject."}
+    )
+    client_id: Annotated[str | None, "Verified calling client identifier."] = field(
+        metadata={"description": "Verified calling client identifier."}
+    )
+    partition: Annotated[str, "Non-reversible stable storage partition token."] = field(
         metadata={"description": "Non-reversible stable storage partition token."}
     )
-    subject_partition: str = field(
+    subject_partition: Annotated[str, "Non-reversible tenant-and-subject partition token."] = field(
         metadata={"description": "Non-reversible tenant-and-subject partition token."}
     )
-    authorization_partition: str = field(
-        metadata={"description": "Non-reversible authorization-context partition token."}
-    )
+    authorization_partition: Annotated[
+        str, "Non-reversible partition for the complete verified"
+    ] = field(metadata={"description": "Non-reversible partition for the complete verified"})
 
     @classmethod
     def from_invocation(
