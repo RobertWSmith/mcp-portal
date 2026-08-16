@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from typing import Annotated
 
 from fastmcp import Client
 
@@ -16,6 +19,7 @@ from mcp_portal.config import (
     OpenAISettings,
     Settings,
 )
+from mcp_portal.execution import ExecutionCell, ExecutionCellManager, ExecutionIsolation
 from mcp_portal.namespaces import (
     Namespace,
     NamespaceContext,
@@ -24,6 +28,7 @@ from mcp_portal.namespaces import (
     build_namespace_context,
 )
 from mcp_portal.redaction import Redactor
+from mcp_portal.security import InvocationContext, invocation_scope
 
 
 @dataclass(frozen=True)
@@ -48,21 +53,27 @@ class SettingsOverrides:
         health_enabled: Whether the health namespace mounts.
     """
 
-    model_provider: ModelProviderName = "openai"
-    openai_api_key: str | None = "test-key"
-    large_model: str = "large-model"
-    small_model: str = "small-model"
-    embedding_model: str = "embedding-model"
-    azure_openai_endpoint: str | None = None
-    azure_openai_api_version: str | None = None
-    azure_openai_token_scope: str | None = None
-    azure_large_model_deployment: str | None = None
-    azure_small_model_deployment: str | None = None
-    azure_embedding_model_deployment: str | None = None
-    azure_tenant_id: str | None = None
-    azure_client_id: str | None = None
-    azure_client_secret: str | None = None
-    health_enabled: bool = True
+    model_provider: Annotated[ModelProviderName, "Active test model provider."] = "openai"
+    openai_api_key: Annotated[str | None, "Optional test OpenAI API key."] = "test-key"
+    large_model: Annotated[str, "Test large language model name."] = "large-model"
+    small_model: Annotated[str, "Test small language model name."] = "small-model"
+    embedding_model: Annotated[str, "Test embedding model name."] = "embedding-model"
+    azure_openai_endpoint: Annotated[str | None, "Optional Azure OpenAI endpoint."] = None
+    azure_openai_api_version: Annotated[str | None, "Optional Azure OpenAI API version."] = None
+    azure_openai_token_scope: Annotated[str | None, "Optional Azure OpenAI token scope."] = None
+    azure_large_model_deployment: Annotated[
+        str | None, "Optional Azure large model deployment."
+    ] = None
+    azure_small_model_deployment: Annotated[
+        str | None, "Optional Azure small model deployment."
+    ] = None
+    azure_embedding_model_deployment: Annotated[
+        str | None, "Optional Azure embedding deployment."
+    ] = None
+    azure_tenant_id: Annotated[str | None, "Optional Azure tenant id."] = None
+    azure_client_id: Annotated[str | None, "Optional Azure client id."] = None
+    azure_client_secret: Annotated[str | None, "Optional Azure client secret."] = None
+    health_enabled: Annotated[bool, "Whether the health namespace mounts."] = True
 
 
 def create_test_settings(overrides: SettingsOverrides | None = None) -> Settings:
@@ -143,6 +154,41 @@ def create_namespace_test_context(
             clock=dependencies.clock,
         ),
     )
+
+
+@contextmanager
+def namespace_execution_scope(
+    context: NamespaceContext,
+    invocation: InvocationContext,
+    *,
+    isolation: ExecutionIsolation = "in_process",
+) -> Iterator[ExecutionCell]:
+    """Activate a production-equivalent execution cell for a namespace unit test.
+
+    Args:
+        context: Namespace context whose capabilities will be exercised.
+        invocation: Trusted test invocation to bind to the cell.
+        isolation: Simulated provider isolation boundary.
+
+    Yields:
+        Active execution cell.
+
+    Returns:
+        Context manager that restores invocation and cell state after the test.
+    """
+    manager = ExecutionCellManager(
+        frozenset(context.settings.enterprise.execution_remote_classifications)
+    )
+    with (
+        invocation_scope(invocation),
+        manager.open(
+            invocation,
+            namespace=context.name,
+            data_classification=context.data_classification,
+            isolation=isolation,
+        ) as cell,
+    ):
+        yield cell
 
 
 def create_namespace_test_client(

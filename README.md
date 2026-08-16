@@ -30,10 +30,17 @@ accepted values, loading behavior, and production requirements.
 - `MCP_PORTAL_HTTP_PATH` and `MCP_PORTAL_HEALTH_PATH`
 - `MCP_PORTAL_DATABASE_PROVIDER`, `MCP_PORTAL_DATABASE_SQLALCHEMY_URL`, and `MCP_PORTAL_ORACLE_*`
 - `MCP_PORTAL_MONGODB_*` for LangChain MongoDB connectors
+- `MCP_PORTAL_EGRESS_ALLOWED_HOSTS`, `MCP_PORTAL_EGRESS_DESTINATION_CLASSIFICATIONS`, and
+  `MCP_PORTAL_EGRESS_SENSITIVE_FIELD_ACTION` for data-aware outbound policy
+- `MCP_PORTAL_EXECUTION_REMOTE_CLASSIFICATIONS` for classifications requiring remote cells
 - `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, and `MCP_PORTAL_*` telemetry controls
 
 The health namespace exposes only non-secret configuration metadata. It never returns
 raw API keys or Azure client secrets.
+
+The `public` namespace exposes `public_duckduckgo_search`, backed by LangChain
+Community's `DuckDuckGoSearchRun`. It declares no namespace-specific scopes, so any
+identity accepted by the portal authentication provider can discover and invoke it.
 
 ## Run
 
@@ -91,23 +98,25 @@ for a dependency-free liveness probe. `MCP_PORTAL_READINESS_PATH` evaluates name
 registered dependency probes, and downstream circuit state. By default the routes are `/mcp`,
 `/healthz`, and `/readyz`.
 
-Remote HTTP deployments should set `MCP_PORTAL_AUTH_PROVIDER=jwt` with either
-`MCP_PORTAL_AUTH_JWT_JWKS_URI` or `MCP_PORTAL_AUTH_JWT_PUBLIC_KEY`. Static bearer
-tokens are available through `MCP_PORTAL_AUTH_PROVIDER=static`, but they are intended
-only for local smoke tests.
+Remote HTTP deployments should set `MCP_PORTAL_AUTH_PROVIDER=oauth` with an HTTPS JWKS
+URI, exact issuer and audience, authorization-server URL, and canonical resource URL. The
+portal publishes OAuth Protected Resource Metadata so MCP clients can discover the external
+authorization server. Static bearer tokens and verifier-only `jwt` mode remain available for
+local testing and staged migration.
 
 Hardened deployments should also set `MCP_PORTAL_PRODUCTION_REQUIRE_AUTH=true` and
 `MCP_PORTAL_AUTH_RESOURCE_SERVER_URL` to the canonical external HTTPS MCP resource URI.
-JWT production validation then requires an issuer, audience, and resource URI before the
-server starts. The active tool-call path enforces tag scopes, per-identity quota partitions,
+OAuth production validation requires HTTPS discovery URLs, asymmetric JWT signing, JWKS key
+rotation, and exact resource/audience binding before the server starts. The active tool-call path enforces tag scopes, per-identity quota partitions,
 concurrency, deadlines, response limits, standard safety annotations, approval requirements,
-and sanitized audit events.
+single-use execution cells, and sanitized audit events.
 
-Enterprise namespaces receive trusted invocation identity/tenant context, an outbound HTTPS
-policy, a downstream credential-broker boundary, and an authorization-bound task store. Tool
+Enterprise namespaces receive trusted invocation identity/tenant context, a data-aware outbound
+HTTPS policy, a downstream credential-broker boundary, and an authorization-bound task store. Tool
 deadlines and concurrency can be overridden by fully-qualified tool name. Namespace code can
-run external work through `context.downstream(...)` for bounded calls, closed/open/half-open
-circuit breaking, and dependency-aware readiness.
+run external work through `context.downstream(...)` for destination classification, structured
+payload inspection, pre-credential audit, bounded calls, closed/open/half-open circuit breaking,
+and dependency-aware readiness.
 See [the enterprise roadmap](docs/enterprise-roadmap.md) for production adapters and rollout
 phases.
 
@@ -202,14 +211,27 @@ index name.
 Namespaces can request the lazy connector helper with:
 
 ```python
-connectors = context.clients.create("langchain_mongodb")
+connectors = context.mongodb()
 vector_store = connectors.vector_search(embedding=embeddings)
 history = connectors.chat_message_history(session_id="chat-session")
 cache = connectors.cache()
+semantic_cache = connectors.semantic_cache(
+    embedding=embeddings,
+    policy_version="example-v1",
+)
 ```
 
-The helper also exposes `cache()`, `semantic_cache()`, `loader()`, `doc_store()`, and
-`agent_database()` for the matching `langchain-mongodb` integration classes.
+The tenant-aware façade also exposes `loader()` for governed document loading. Namespace code
+should not request the raw `langchain_mongodb` client when tenant-aware storage is required.
+
+Semantic caches require an authenticated subject or workload plus a namespace-owned
+`policy_version`. Lookups and deletes use backend-enforced tenant and authorization metadata
+filters; prompt prefixes are not treated as an isolation boundary. The authorization partition
+includes the verified subject, client, scopes, Linux groups, authentication method, and current
+tool. Change `policy_version` whenever authorization rules or source-data semantics change, and
+configure the Atlas Vector Search index so `_portal_tenant` and `_portal_authorization` are
+filter fields. Missing filter-index support causes lookups to fail instead of falling back to an
+unfiltered search.
 
 FastMCP emits spans and MCP Portal emits tool, admission, downstream, usage, and estimated-cost
 metrics when an OpenTelemetry SDK is attached. Set `OTEL_SERVICE_NAME` and
@@ -389,6 +411,9 @@ zero-argument manifest factory. The portal does not scan arbitrary installed mod
 Namespaces that need independent deployment or security isolation can return a
 `RemoteNamespaceProvider` from their manifest factory. The provider uses FastMCP's proxy
 boundary while the portal retains local catalog, authorization, admission, and audit policy.
+Every invocation receives a request-, identity-, tool-, and namespace-bound execution cell;
+`restricted` namespaces require this remote boundary by default. In-process cells provide
+lifetime and capability isolation for trusted code, not an operating-system sandbox.
 
 Each namespace receives a `NamespaceContext` with shared settings, a namespace-scoped
 logger, a redactor for safe diagnostics, a clock, and lazy external client factories.

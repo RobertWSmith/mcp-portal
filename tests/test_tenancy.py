@@ -8,18 +8,21 @@ from typing import Any
 
 import pytest
 from fastmcp import FastMCP
+from langchain_core.outputs import Generation
 
 from mcp_portal.clients import ClientFactories
 from mcp_portal.config import AuthSettings, EnterpriseSettings
-from mcp_portal.egress import EgressPolicy
+from mcp_portal.egress import EgressPolicy, EgressRequest
 from mcp_portal.errors import PermissionPortalError, ValidationPortalError
 from mcp_portal.errors import ConfigurationPortalError
 from mcp_portal.policy import ScopePolicyEngine
 from mcp_portal.namespaces import NamespaceDependencies
-from mcp_portal.security import InvocationContext, InvocationIdentity, invocation_scope
+from mcp_portal.security import InvocationContext, InvocationIdentity
 from mcp_portal.tasks import MemoryTaskStore
 from mcp_portal.tenancy import (
+    AUTHORIZATION_FIELD,
     TENANT_FIELD,
+    IsolatedSemanticCacheProxy,
     TenantCacheProxy,
     TenantMongoDBConnectors,
     TenantScope,
@@ -27,18 +30,30 @@ from mcp_portal.tenancy import (
     TenantTaskService,
     TenantVectorStoreProxy,
 )
-from mcp_portal.testing import create_namespace_test_context, create_test_settings
+from mcp_portal.testing import (
+    create_namespace_test_context,
+    create_test_settings,
+    namespace_execution_scope,
+)
 
 
 def invocation(
     tenant: str | None = "tenant-a",
     subject: str | None = "user",
     client_id: str | None = "client",
+    *,
+    scopes: frozenset[str] = frozenset(),
+    tool_name: str = "tool",
 ):
     return InvocationContext(
         "request",
-        "tool",
-        InvocationIdentity(subject=subject, client_id=client_id, tenant_id=tenant),
+        tool_name,
+        InvocationIdentity(
+            subject=subject,
+            client_id=client_id,
+            tenant_id=tenant,
+            scopes=scopes,
+        ),
         30,
     )
 
@@ -53,6 +68,52 @@ def test_tenant_scope_derives_stable_non_reversible_partitions() -> None:
     assert "tenant-a" not in first.partition
     assert first.key("record") != other.key("record")
     assert first.key("record", subject_scoped=True).startswith(first.subject_partition)
+    assert first.authorization_partition == same.authorization_partition
+    assert first.authorization_partition != other.authorization_partition
+
+
+def test_authorization_partition_changes_with_verified_entitlements_and_tool() -> None:
+    baseline_invocation = invocation(scopes=frozenset({"records.read"}))
+    baseline_invocation = replace(
+        baseline_invocation,
+        identity=replace(baseline_invocation.identity, linux_groups=frozenset({"employees"})),
+    )
+    baseline = TenantScope.from_invocation(baseline_invocation)
+    reordered = TenantScope.from_invocation(baseline_invocation)
+    other_group = replace(
+        baseline_invocation,
+        identity=replace(baseline_invocation.identity, linux_groups=frozenset({"records-admins"})),
+    )
+
+    assert baseline.authorization_partition == reordered.authorization_partition
+    assert (
+        baseline.authorization_partition
+        != TenantScope.from_invocation(other_group).authorization_partition
+    )
+    assert (
+        baseline.authorization_partition
+        != TenantScope.from_invocation(
+            invocation(scopes=frozenset({"records.read", "records.admin"}))
+        ).authorization_partition
+    )
+    assert (
+        baseline.authorization_partition
+        != TenantScope.from_invocation(
+            invocation(subject="other", scopes=frozenset({"records.read"}))
+        ).authorization_partition
+    )
+    assert (
+        baseline.authorization_partition
+        != TenantScope.from_invocation(
+            invocation(client_id="other-client", scopes=frozenset({"records.read"}))
+        ).authorization_partition
+    )
+    assert (
+        baseline.authorization_partition
+        != TenantScope.from_invocation(
+            invocation(tool_name="other_tool", scopes=frozenset({"records.read"}))
+        ).authorization_partition
+    )
 
 
 def test_tenant_scope_rejects_missing_identity_and_invalid_keys() -> None:
@@ -173,6 +234,127 @@ async def test_cache_proxy_refuses_unsafe_global_clear() -> None:
         await proxy.aclear()
 
 
+def _matches_filter(metadata: dict[str, Any], query: dict[str, Any]) -> bool:
+    if "$and" in query:
+        return all(_matches_filter(metadata, item) for item in query["$and"])
+    return all(
+        metadata.get(key) == (value.get("$eq") if isinstance(value, dict) else value)
+        for key, value in query.items()
+    )
+
+
+class FakeSemanticCollection:
+    def __init__(self, backend) -> None:
+        self.backend = backend
+
+    def delete_many(self, query):
+        before = len(self.backend.entries)
+        self.backend.entries = [
+            entry for entry in self.backend.entries if not _matches_filter(entry.metadata, query)
+        ]
+        return before - len(self.backend.entries)
+
+
+class FakeSemanticCache:
+    LLM = "llm_string"
+    RETURN_VAL = "return_val"
+
+    def __init__(self) -> None:
+        self.entries: list[SimpleNamespace] = []
+        self.searches: list[dict[str, Any]] = []
+        self.collection = FakeSemanticCollection(self)
+        self.score_threshold = 0.8
+
+    def add_texts(self, texts, metadatas):
+        self.entries.extend(
+            SimpleNamespace(page_content=text, metadata=dict(metadata))
+            for text, metadata in zip(texts, metadatas, strict=True)
+        )
+        return ["id"]
+
+    async def aadd_texts(self, texts, metadatas):
+        return self.add_texts(texts, metadatas)
+
+    def similarity_search_with_score(self, query, count, **kwargs):
+        self.searches.append(kwargs)
+        matches = [
+            entry for entry in self.entries if _matches_filter(entry.metadata, kwargs["pre_filter"])
+        ]
+        matches.sort(key=lambda entry: entry.page_content != query)
+        return [(entry, 1.0) for entry in matches[:count]]
+
+    async def asimilarity_search_with_score(self, query, count, **kwargs):
+        return self.similarity_search_with_score(query, count, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_enforces_backend_authorization_filters() -> None:
+    backend = FakeSemanticCache()
+    alice_scope = TenantScope.from_invocation(
+        invocation(subject="alice", scopes=frozenset({"records.read"}))
+    )
+    bob_scope = TenantScope.from_invocation(
+        invocation(subject="bob", scopes=frozenset({"records.read"}))
+    )
+    alice = IsolatedSemanticCacheProxy(backend, alice_scope, policy_version="records-v1")
+    bob = IsolatedSemanticCacheProxy(backend, bob_scope, policy_version="records-v1")
+
+    alice.update("same prompt", "model", [Generation(text="alice result")])
+    bob.update("same prompt", "model", [Generation(text="bob result")])
+
+    assert alice.lookup("same prompt", "model")[0].text == "alice result"
+    assert bob.lookup("same prompt", "model")[0].text == "bob result"
+    assert backend.searches[-1]["post_filter_pipeline"] == [{"$match": {"score": {"$gte": 0.8}}}]
+    required_filter = backend.searches[-1]["pre_filter"]["$and"]
+    assert {TENANT_FIELD: {"$eq": bob_scope.partition}} in required_filter
+    assert {AUTHORIZATION_FIELD: {"$eq": bob.partition}} in required_filter
+
+    elevated = IsolatedSemanticCacheProxy(
+        backend,
+        TenantScope.from_invocation(
+            invocation(subject="alice", scopes=frozenset({"records.read", "records.admin"}))
+        ),
+        policy_version="records-v1",
+    )
+    next_policy = IsolatedSemanticCacheProxy(backend, alice_scope, policy_version="records-v2")
+    other_tenant = IsolatedSemanticCacheProxy(
+        backend,
+        TenantScope.from_invocation(
+            invocation("tenant-b", subject="alice", scopes=frozenset({"records.read"}))
+        ),
+        policy_version="records-v1",
+    )
+    assert elevated.lookup("same prompt", "model") is None
+    assert next_policy.lookup("same prompt", "model") is None
+    assert other_tenant.lookup("same prompt", "model") is None
+
+    await alice.aupdate("async prompt", "model", [Generation(text="async result")])
+    assert (await alice.alookup("async prompt", "model"))[0].text == "async result"
+    assert alice.clear(llm_string={"$eq": "model"}) == 2
+    assert bob.lookup("same prompt", "model")[0].text == "bob result"
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_fails_closed_without_identity_or_backend_support() -> None:
+    anonymous = TenantScope.from_invocation(invocation(None, None, None))
+    with pytest.raises(PermissionPortalError, match="authenticated"):
+        IsolatedSemanticCacheProxy(FakeSemanticCache(), anonymous, policy_version="v1")
+
+    proxy = IsolatedSemanticCacheProxy(
+        object(), TenantScope.from_invocation(invocation()), policy_version="v1"
+    )
+    with pytest.raises(PermissionPortalError, match="cannot enforce"):
+        proxy.lookup("prompt", "model")
+    with pytest.raises(PermissionPortalError, match="safe clearing"):
+        proxy.clear()
+    with pytest.raises(ValidationPortalError, match="reserved"):
+        await IsolatedSemanticCacheProxy(
+            FakeSemanticCache(), TenantScope.from_invocation(invocation()), policy_version="v1"
+        ).aclear(**{AUTHORIZATION_FIELD: "spoof"})
+    with pytest.raises(ValidationPortalError, match="1 to 128"):
+        TenantScope.from_invocation(invocation()).semantic_cache_partition(" ")
+
+
 class FakeVectorStore:
     def __init__(self) -> None:
         self.documents = None
@@ -225,9 +407,9 @@ class FakeConnectors:
         self.calls.append(("cache", kwargs))
         return self.cache_value
 
-    def semantic_cache(self, **kwargs):
+    def semantic_cache(self, *, scope, policy_version, **kwargs):
         self.calls.append(("semantic", kwargs))
-        return self.cache_value
+        return IsolatedSemanticCacheProxy(self.cache_value, scope, policy_version=policy_version)
 
     def vector_search(self, **kwargs):
         self.calls.append(("vector", kwargs))
@@ -245,7 +427,10 @@ def test_mongodb_facade_scopes_connector_identifiers_and_filters() -> None:
 
     assert scope.subject_partition in facade.chat_message_history("session")
     assert isinstance(facade.cache(collection="cache"), TenantCacheProxy)
-    assert isinstance(facade.semantic_cache("embedding"), TenantCacheProxy)
+    assert isinstance(
+        facade.semantic_cache("embedding", policy_version="test-v1"),
+        IsolatedSemanticCacheProxy,
+    )
     assert isinstance(facade.vector_search("embedding"), TenantVectorStoreProxy)
     loader = facade.loader(filter_criteria={"kind": "memo"})
     assert loader["filter_criteria"]["$and"][0] == {TENANT_FIELD: scope.partition}
@@ -261,23 +446,41 @@ async def test_namespace_context_exposes_only_invocation_bound_facades() -> None
     connectors = FakeConnectors()
     context = create_namespace_test_context(
         dependencies=NamespaceDependencies(
-            clients=ClientFactories({"langchain_mongodb": lambda: connectors})
+            clients=ClientFactories(
+                {
+                    "langchain_mongodb": lambda: connectors,
+                    "records_api": object,
+                }
+            )
         )
     )
     context = replace(
         context,
         credentials=FakeBroker(),
-        egress=EgressPolicy(frozenset({"api.example.com"})),
+        egress=EgressPolicy(
+            frozenset({"api.example.com"}),
+            destination_classifications={"api.example.com": "internal"},
+        ),
     )
 
-    with invocation_scope(invocation()):
+    with namespace_execution_scope(context, invocation()):
         assert context.tenant_scope().tenant_id == "tenant-a"
         assert isinstance(context.tenant_tasks(), TenantTaskService)
         assert isinstance(context.tenant_sql(), TenantSQLExecutor)
         assert isinstance(context.mongodb(), TenantMongoDBConnectors)
         assert context.outbound_url("https://api.example.com") == "https://api.example.com"
-        credential = await context.downstream_credential("https://api.example.com")
-    assert credential == "credential:tenant-a:https://api.example.com"
+        approved = await context.downstream(
+            "records_api",
+            EgressRequest(
+                destination="https://api.example.com/records",
+                purpose="records.lookup",
+                payload={"record_id": 7},
+                credential_audience="https://api.example.com",
+            ),
+            lambda request: request,
+        )
+    assert approved.payload == {"record_id": 7}
+    assert approved.credential == "credential:tenant-a:https://api.example.com"
 
 
 @pytest.mark.asyncio
@@ -335,7 +538,8 @@ async def test_cross_tenant_override_requires_explicit_admin_scope() -> None:
 
 def test_production_validation_requires_auth_for_tenant_isolation() -> None:
     settings = replace(create_test_settings(), enterprise=EnterpriseSettings(require_tenant=True))
-    with pytest.raises(PermissionPortalError), invocation_scope(invocation(None)):
-        create_namespace_test_context(settings=settings).tenant_scope()
+    context = create_namespace_test_context(settings=settings)
+    with pytest.raises(PermissionPortalError), namespace_execution_scope(context, invocation(None)):
+        context.tenant_scope()
     with pytest.raises(ConfigurationPortalError, match="unsafe"):
         settings.validate_production()

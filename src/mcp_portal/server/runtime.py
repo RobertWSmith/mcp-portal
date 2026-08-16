@@ -13,6 +13,7 @@ from mcp_portal.approvals import RejectingApprovalVerifier
 from mcp_portal.audit import LoggingAuditSink
 from mcp_portal.auth import EnterpriseAuthProvider, EnterpriseAuthSchemeMiddleware
 from mcp_portal.config import Settings
+from mcp_portal.execution import ExecutionCellManager, ExecutionIsolation
 from mcp_portal.namespaces import Namespace, NamespaceProvider
 from mcp_portal.observability import create_telemetry_recorder
 from mcp_portal.policy import PolicyDecision, ScopePolicyEngine
@@ -63,6 +64,9 @@ class PortalFastMCP(FastMCP):
             selected_settings.enterprise.max_concurrent_requests,
             selected_services.quota_backend,
         )
+        self.execution_cells = ExecutionCellManager(
+            frozenset(selected_settings.enterprise.execution_remote_classifications)
+        )
         self.component_namespaces: dict[tuple[str, str], Namespace] = {}
         self.remote_namespaces: dict[str, Namespace] = {}
         self.namespace_runtimes: tuple[Any, ...] = ()
@@ -84,6 +88,14 @@ class PortalFastMCP(FastMCP):
             namespace: Namespace manifest or prefix.
         """
         namespace_name = namespace.name if isinstance(namespace, Namespace) else namespace
+        if isinstance(namespace, Namespace):
+            self.execution_cells.validate_boundary(
+                namespace=namespace.name,
+                data_classification=namespace.data_classification,
+                isolation=(
+                    "remote" if isinstance(provider, RemoteNamespaceProvider) else "in_process"
+                ),
+            )
         if isinstance(provider, RemoteNamespaceProvider):
             if not isinstance(namespace, Namespace):
                 raise TypeError("Remote namespace providers require a governed Namespace manifest")
@@ -96,6 +108,19 @@ class PortalFastMCP(FastMCP):
             prefix=f"{namespace_name}_",
             namespace=namespace,
         )
+
+    def execution_isolation(self, namespace: Namespace | None) -> ExecutionIsolation:
+        """Return the actual isolation boundary for a mounted namespace.
+
+        Args:
+            namespace: Namespace owning the active tool, if governed.
+
+        Returns:
+            `remote` for proxy providers and `in_process` for local providers.
+        """
+        if namespace is not None and namespace.name in self.remote_namespaces:
+            return "remote"
+        return "in_process"
 
     def add_namespace_provider(self, provider: NamespaceProvider) -> None:
         """Install an ungoverned development provider without a prefix.

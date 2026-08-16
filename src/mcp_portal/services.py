@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Annotated
 from datetime import datetime
 
 from mcp_portal.approvals import ApprovalVerifier
@@ -39,18 +40,26 @@ class PortalServices:
         clock: Injectable UTC clock for namespace code.
     """
 
-    clients: ClientFactories | None = None
-    policy_engine: PolicyEngine | None = None
-    audit_sink: AuditSink | None = None
-    quota_backend: QuotaBackend | None = None
-    approval_verifier: ApprovalVerifier | None = None
-    task_store: TaskStore | None = None
-    telemetry: TelemetryRecorder | None = None
-    cost_sink: CostSink | None = None
-    credential_broker: CredentialBroker | None = None
-    egress_policy: EgressPolicy | None = None
-    redactor: Redactor | None = None
-    clock: Clock | None = None
+    clients: Annotated[
+        ClientFactories | None, "Shared lifecycle-managed external client registry."
+    ] = None
+    policy_engine: Annotated[
+        PolicyEngine | None, "Central authorization policy decision point."
+    ] = None
+    audit_sink: Annotated[AuditSink | None, "Append-only security audit destination."] = None
+    quota_backend: Annotated[QuotaBackend | None, "Shared request-quota backend."] = None
+    approval_verifier: Annotated[
+        ApprovalVerifier | None, "Single-use out-of-band approval verifier."
+    ] = None
+    task_store: Annotated[TaskStore | None, "Authorization-bound durable task store."] = None
+    telemetry: Annotated[TelemetryRecorder | None, "Metrics and cost-accounting recorder."] = None
+    cost_sink: Annotated[CostSink | None, "Detailed usage and cost destination."] = None
+    credential_broker: Annotated[
+        CredentialBroker | None, "Audience-bound downstream credential broker."
+    ] = None
+    egress_policy: Annotated[EgressPolicy | None, "Outbound destination policy."] = None
+    redactor: Annotated[Redactor | None, "Diagnostic redaction service."] = None
+    clock: Annotated[Clock | None, "Injectable UTC clock for namespace code."] = None
 
 
 # Compatibility aliases for the pre-0.2 composition API. Both names now refer to the

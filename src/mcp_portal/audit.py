@@ -7,7 +7,7 @@ import json
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
 from mcp_portal.policy import PolicyDecision
 from mcp_portal.security import InvocationContext
@@ -30,29 +30,105 @@ class AuditEvent:
         reason: Optional policy reason.
         outcome: Optional completion outcome.
         duration_ms: Optional execution duration.
+        destination_host: Optional normalized outbound hostname.
+        egress_method: Optional normalized outbound HTTP method.
+        data_classification: Optional classification of released outbound data.
+        detected_classification: Optional classification detected before redaction.
+        destination_max_classification: Optional destination classification ceiling.
+        payload_digest: Optional digest of the original outbound payload.
+        findings: Optional stable DLP finding labels without sensitive values.
+        purpose: Optional low-cardinality outbound purpose.
+        execution_cell_id: Optional single-use execution-cell identifier.
+        execution_cell_namespace: Optional namespace bound to the execution cell.
+        execution_isolation: Optional in-process or remote isolation boundary.
     """
 
-    occurred_at: str = field(metadata={"description": "UTC event timestamp."})
-    event: str = field(metadata={"description": "Lifecycle event type."})
-    request_id: str = field(metadata={"description": "Server-generated correlation identifier."})
-    tool_name: str = field(metadata={"description": "Fully-qualified tool name."})
-    subject: str | None = field(
+    occurred_at: Annotated[str, "UTC event timestamp."] = field(
+        metadata={"description": "UTC event timestamp."}
+    )
+    event: Annotated[str, "Lifecycle event type."] = field(
+        metadata={"description": "Lifecycle event type."}
+    )
+    request_id: Annotated[str, "Server-generated correlation identifier."] = field(
+        metadata={"description": "Server-generated correlation identifier."}
+    )
+    tool_name: Annotated[str, "Fully-qualified tool name."] = field(
+        metadata={"description": "Fully-qualified tool name."}
+    )
+    subject: Annotated[str | None, "Authenticated human or workload subject."] = field(
         metadata={"description": "Authenticated human or workload subject."}
     )
-    tenant_id: str | None = field(metadata={"description": "Trusted tenant partition."})
-    client_id: str | None = field(metadata={"description": "Calling OAuth client identifier."})
-    argument_digest: str = field(
+    tenant_id: Annotated[str | None, "Trusted tenant partition."] = field(
+        metadata={"description": "Trusted tenant partition."}
+    )
+    client_id: Annotated[str | None, "Calling OAuth client identifier."] = field(
+        metadata={"description": "Calling OAuth client identifier."}
+    )
+    argument_digest: Annotated[str, "SHA-256 digest of canonicalized arguments."] = field(
         metadata={"description": "SHA-256 digest of canonicalized arguments."}
     )
-    allowed: bool | None = field(
+    allowed: Annotated[bool | None, "Optional authorization result."] = field(
         default=None, metadata={"description": "Optional authorization result."}
     )
-    reason: str | None = field(default=None, metadata={"description": "Optional policy reason."})
-    outcome: str | None = field(
+    reason: Annotated[str | None, "Optional policy reason."] = field(
+        default=None, metadata={"description": "Optional policy reason."}
+    )
+    outcome: Annotated[str | None, "Optional completion outcome."] = field(
         default=None, metadata={"description": "Optional completion outcome."}
     )
-    duration_ms: float | None = field(
+    duration_ms: Annotated[float | None, "Optional execution duration."] = field(
         default=None, metadata={"description": "Optional execution duration."}
+    )
+    destination_host: Annotated[str | None, "Optional normalized outbound hostname."] = field(
+        default=None, metadata={"description": "Optional normalized outbound hostname."}
+    )
+    egress_method: Annotated[str | None, "Optional normalized outbound HTTP method."] = field(
+        default=None, metadata={"description": "Optional normalized outbound HTTP method."}
+    )
+    data_classification: Annotated[
+        str | None, "Optional classification of released outbound data."
+    ] = field(
+        default=None, metadata={"description": "Optional classification of released outbound data."}
+    )
+    detected_classification: Annotated[
+        str | None, "Optional classification detected before redaction."
+    ] = field(
+        default=None, metadata={"description": "Optional classification detected before redaction."}
+    )
+    destination_max_classification: Annotated[
+        str | None, "Optional destination classification ceiling."
+    ] = field(
+        default=None, metadata={"description": "Optional destination classification ceiling."}
+    )
+    payload_digest: Annotated[str | None, "Optional digest of the original outbound payload."] = (
+        field(
+            default=None,
+            metadata={"description": "Optional digest of the original outbound payload."},
+        )
+    )
+    findings: Annotated[
+        tuple[str, ...], "Optional stable DLP finding labels without sensitive values."
+    ] = field(
+        default=(),
+        metadata={"description": "Optional stable DLP finding labels without sensitive values."},
+    )
+    purpose: Annotated[str | None, "Optional low-cardinality outbound purpose."] = field(
+        default=None, metadata={"description": "Optional low-cardinality outbound purpose."}
+    )
+    execution_cell_id: Annotated[str | None, "Optional single-use execution-cell identifier."] = (
+        field(
+            default=None, metadata={"description": "Optional single-use execution-cell identifier."}
+        )
+    )
+    execution_cell_namespace: Annotated[
+        str | None, "Optional namespace bound to the execution cell."
+    ] = field(
+        default=None, metadata={"description": "Optional namespace bound to the execution cell."}
+    )
+    execution_isolation: Annotated[
+        str | None, "Optional in-process or remote isolation boundary."
+    ] = field(
+        default=None, metadata={"description": "Optional in-process or remote isolation boundary."}
     )
 
 
@@ -62,19 +138,64 @@ class AuditDetails:
 
     Attributes:
         decision: Optional authorization decision.
+        allowed: Optional direct policy result when no `PolicyDecision` is used.
+        reason: Optional direct policy decision reason.
         outcome: Optional completion outcome.
         duration_ms: Optional execution duration.
+        destination_host: Optional normalized outbound hostname.
+        egress_method: Optional outbound HTTP method.
+        data_classification: Optional classification of released outbound data.
+        detected_classification: Optional classification detected before redaction.
+        destination_max_classification: Optional destination classification ceiling.
+        payload_digest: Optional outbound payload digest.
+        findings: Stable DLP finding labels without sensitive values.
+        purpose: Optional low-cardinality outbound purpose.
+        execution_cell_id: Optional single-use execution-cell identifier.
+        execution_cell_namespace: Optional namespace bound to the execution cell.
+        execution_isolation: Optional in-process or remote isolation boundary.
     """
 
-    decision: PolicyDecision | None = field(
+    decision: Annotated[PolicyDecision | None, "Optional authorization decision."] = field(
         default=None, metadata={"description": "Optional authorization decision."}
     )
-    outcome: str | None = field(
+    allowed: Annotated[
+        bool | None, "Optional direct policy result when no `PolicyDecision` is used."
+    ] = field(
+        default=None,
+        metadata={"description": "Optional direct policy result when no `PolicyDecision` is used."},
+    )
+    reason: Annotated[str | None, "Optional direct policy decision reason."] = field(
+        default=None, metadata={"description": "Optional direct policy decision reason."}
+    )
+    outcome: Annotated[str | None, "Optional completion outcome."] = field(
         default=None, metadata={"description": "Optional completion outcome."}
     )
-    duration_ms: float | None = field(
+    duration_ms: Annotated[float | None, "Optional execution duration."] = field(
         default=None, metadata={"description": "Optional execution duration."}
     )
+    destination_host: Annotated[str | None, "Optional normalized outbound hostname."] = None
+    egress_method: Annotated[str | None, "Optional outbound HTTP method."] = None
+    data_classification: Annotated[
+        str | None, "Optional classification of released outbound data."
+    ] = None
+    detected_classification: Annotated[
+        str | None, "Optional classification detected before redaction."
+    ] = None
+    destination_max_classification: Annotated[
+        str | None, "Optional destination classification ceiling."
+    ] = None
+    payload_digest: Annotated[str | None, "Optional outbound payload digest."] = None
+    findings: Annotated[tuple[str, ...], "Stable DLP finding labels without sensitive values."] = ()
+    purpose: Annotated[str | None, "Optional low-cardinality outbound purpose."] = None
+    execution_cell_id: Annotated[str | None, "Optional single-use execution-cell identifier."] = (
+        None
+    )
+    execution_cell_namespace: Annotated[
+        str | None, "Optional namespace bound to the execution cell."
+    ] = None
+    execution_isolation: Annotated[
+        str | None, "Optional in-process or remote isolation boundary."
+    ] = None
 
 
 class AuditSink(Protocol):
@@ -167,8 +288,19 @@ def audit_event(
         tenant_id=identity.tenant_id,
         client_id=identity.client_id,
         argument_digest=digest_arguments(arguments),
-        allowed=details.decision.allowed if details.decision else None,
-        reason=details.decision.reason if details.decision else None,
+        allowed=details.decision.allowed if details.decision else details.allowed,
+        reason=details.decision.reason if details.decision else details.reason,
         outcome=details.outcome,
         duration_ms=details.duration_ms,
+        destination_host=details.destination_host,
+        egress_method=details.egress_method,
+        data_classification=details.data_classification,
+        detected_classification=details.detected_classification,
+        destination_max_classification=details.destination_max_classification,
+        payload_digest=details.payload_digest,
+        findings=details.findings,
+        purpose=details.purpose,
+        execution_cell_id=details.execution_cell_id,
+        execution_cell_namespace=details.execution_cell_namespace,
+        execution_isolation=details.execution_isolation,
     )

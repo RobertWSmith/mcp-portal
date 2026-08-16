@@ -15,7 +15,6 @@ from mcp_portal.policy import PolicyDecision
 from mcp_portal.security import (
     InvocationContext,
     InvocationIdentity,
-    invocation_scope,
 )
 from mcp_portal.server import PortalDependencies, create_mcp
 from mcp_portal.telemetry import (
@@ -25,7 +24,11 @@ from mcp_portal.telemetry import (
     UsageMeasurement,
     UsageRecord,
 )
-from mcp_portal.testing import create_namespace_test_context, create_test_settings
+from mcp_portal.testing import (
+    create_namespace_test_context,
+    create_test_settings,
+    namespace_execution_scope,
+)
 
 
 class DenyTelemetryPolicy:
@@ -213,7 +216,7 @@ async def test_namespace_context_records_usage_with_configured_defaults() -> Non
         dependencies=NamespaceDependencies(telemetry=recorder),
     )
 
-    with invocation_scope(invocation()):
+    with namespace_execution_scope(context, invocation()):
         record = await context.record_usage(
             UsageMeasurement(
                 provider="internal",

@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 from dataclasses import replace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from joserfc import jwt
+from joserfc.jwk import OctKey
 
 import mcp_portal.auth as auth_module
 import mcp_portal.namespaces as namespace_registry
 from mcp_portal.asgi import create_app
-from mcp_portal.auth import create_auth_provider, create_authorization_checks
+from mcp_portal.auth import create_auth_provider
 from mcp_portal.config import (
     AuthSettings,
     HttpSettings,
@@ -22,6 +25,7 @@ from mcp_portal.contracts import generate_tool_contract_manifest
 from mcp_portal.errors import ConfigurationPortalError
 from mcp_portal.observability import configure_observability_environment
 from mcp_portal.namespaces import Namespace, NamespaceProvider
+from mcp_portal.security import identity_from_token
 from mcp_portal.server import create_mcp
 from mcp_portal.testing import create_test_settings
 
@@ -63,6 +67,140 @@ def test_jwt_auth_provider_accepts_symmetric_key_configuration() -> None:
     )
 
     assert create_auth_provider(settings) is not None
+
+
+@pytest.mark.asyncio
+async def test_jwt_verifier_requires_principal_and_normalizes_application_roles() -> None:
+    """Verify signed tokens need identity and application roles become permissions."""
+    secret = "test-signing-secret-with-at-least-32-bytes"
+    signing_key = OctKey.import_key(secret)
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(
+            provider="jwt",
+            jwt_public_key=secret,
+            jwt_algorithm="HS256",
+            required_scopes=("records.read",),
+        ),
+    )
+    provider = create_auth_provider(settings)
+    assert provider is not None
+    now = int(time.time())
+
+    anonymous = jwt.encode(
+        {"alg": "HS256"},
+        {"exp": now + 60, "roles": ["records.read"]},
+        signing_key,
+    )
+    assert await provider.verify_token(anonymous) is None
+
+    encoded = jwt.encode(
+        {"alg": "HS256"},
+        {
+            "sub": "alice",
+            "azp": "portal-client",
+            "exp": now + 60,
+            "roles": ["records.read"],
+            "amr": ["pwd", "mfa"],
+            "iss": "https://issuer.example",
+        },
+        signing_key,
+    )
+    token = await provider.verify_token(encoded)
+
+    assert token is not None
+    identity = identity_from_token(token, "tenant_id")
+    assert identity.subject == "alice"
+    assert identity.client_id == "portal-client"
+    assert identity.roles == frozenset({"records.read"})
+    assert identity.scopes == frozenset({"records.read"})
+    assert identity.auth_methods == frozenset({"bearer", "pwd", "mfa"})
+    assert identity.principal_type == "delegated_user"
+
+
+@pytest.mark.asyncio
+async def test_jwt_verifier_rejects_future_temporal_claims() -> None:
+    """Verify not-before and issued-at claims honor only configured clock skew."""
+    secret = "test-signing-secret-with-at-least-32-bytes"
+    signing_key = OctKey.import_key(secret)
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(
+            provider="jwt",
+            jwt_public_key=secret,
+            jwt_algorithm="HS256",
+            jwt_clock_skew_seconds=5,
+        ),
+    )
+    provider = create_auth_provider(settings)
+    assert provider is not None
+    now = int(time.time())
+    encoded = jwt.encode(
+        {"alg": "HS256"},
+        {"sub": "alice", "exp": now + 120, "nbf": now + 60, "iat": now + 60},
+        signing_key,
+    )
+
+    assert await provider.verify_token(encoded) is None
+
+
+@pytest.mark.asyncio
+async def test_oauth_provider_publishes_protected_resource_metadata() -> None:
+    """Verify MCP clients can discover the authorization server and supported scopes."""
+    resource_url = "https://portal.example/mcp"
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(
+            provider="oauth",
+            required_scopes=("portal.read",),
+            jwt_jwks_uri="https://issuer.example/jwks",
+            jwt_issuer="https://issuer.example",
+            jwt_audience=resource_url,
+            authorization_server_url="https://issuer.example",
+            resource_server_url=resource_url,
+        ),
+        http=HttpSettings(path="/mcp"),
+    )
+    app = create_mcp(settings).http_app(path="/mcp")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://portal.example"
+    ) as client:
+        unauthorized = await client.post("/mcp")
+        metadata = await client.get("/.well-known/oauth-protected-resource/mcp")
+
+    assert unauthorized.status_code == 401
+    assert (
+        'resource_metadata="https://portal.example/.well-known/' 'oauth-protected-resource/mcp"'
+    ) in unauthorized.headers["www-authenticate"]
+    assert metadata.status_code == 200
+    assert metadata.json()["resource"] == resource_url
+    assert metadata.json()["authorization_servers"] == ["https://issuer.example/"]
+    assert set(metadata.json()["scopes_supported"]) >= {
+        "portal.read",
+        "write",
+        "admin",
+        "external",
+    }
+
+
+def test_oauth_provider_rejects_incomplete_or_misaligned_configuration() -> None:
+    """Verify discovery cannot start with ambiguous resource-server metadata."""
+    settings = replace(
+        create_test_settings(),
+        auth=AuthSettings(
+            provider="oauth",
+            jwt_jwks_uri="https://issuer.example/jwks",
+            jwt_issuer="https://issuer.example",
+            jwt_audience="https://portal.example/mcp",
+            authorization_server_url="https://issuer.example",
+            resource_server_url="https://portal.example/wrong",
+        ),
+        http=HttpSettings(path="/mcp"),
+    )
+
+    with pytest.raises(ConfigurationPortalError, match="ending in the configured MCP HTTP path"):
+        create_auth_provider(settings)
 
 
 def test_ldap_auth_provider_requires_encrypted_directory_connection(monkeypatch) -> None:
@@ -274,15 +412,6 @@ def test_fastmcp_server_receives_portal_auth_provider() -> None:
     server = create_mcp(settings)
 
     assert server.auth is not None
-
-
-def test_authorization_checks_follow_tag_scope_settings() -> None:
-    """Verify tag-to-scope authorization checks are built from settings."""
-    settings = create_test_settings()
-
-    checks = create_authorization_checks(settings)
-
-    assert len(checks) == 4
 
 
 async def test_tool_contract_manifest_fingerprints_health_tools() -> None:

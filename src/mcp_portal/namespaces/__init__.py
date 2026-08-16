@@ -9,14 +9,22 @@ import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.types import Annotations, Icon, ToolAnnotations
 
+from mcp_portal.audit import AuditDetails, AuditSink, LoggingAuditSink, audit_event
 from mcp_portal.clients import ClientFactories, default_client_factories
 from mcp_portal.config import Settings
 from mcp_portal.credentials import CredentialBroker, RejectingCredentialBroker
-from mcp_portal.egress import EgressPolicy
+from mcp_portal.egress import (
+    ApprovedEgress,
+    EgressPolicy,
+    EgressRequest,
+    StructuredPayloadInspector,
+)
+from mcp_portal.errors import PermissionPortalError
+from mcp_portal.execution import ExecutionCell, require_execution_cell
 from mcp_portal.observability import create_telemetry_recorder
 from mcp_portal.redaction import Redactor
 from mcp_portal.security import InvocationContext, current_invocation
@@ -38,7 +46,10 @@ NamespaceHealthCheck = Callable[["NamespaceContext"], "NamespaceStatus"]
 NamespaceState = Literal["ok", "warning", "error", "disabled"]
 _SEMANTIC_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].+)?$")
 _DATA_CLASSIFICATIONS = frozenset({"public", "internal", "confidential", "restricted"})
-BUILTIN_NAMESPACE_MODULES = ("mcp_portal.namespaces.health",)
+BUILTIN_NAMESPACE_MODULES = (
+    "mcp_portal.namespaces.health",
+    "mcp_portal.namespaces.public",
+)
 NAMESPACE_ENTRY_POINT_GROUP = "mcp_portal.namespaces"
 
 
@@ -48,23 +59,31 @@ class NamespaceContext:
 
     Attributes:
         name: Namespace prefix used when mounting provider components.
+        data_classification: Namespace-owned lower bound for outbound data.
         settings: Shared runtime settings.
         logger: Logger scoped to this namespace.
         redactor: Redactor used before exposing diagnostics.
         clients: Registry of external client factories.
         clock: Time provider used by tools and tests.
+        audit: Append-only audit destination.
+        egress: Policy boundary for approved outbound requests.
+        credentials: Broker for audience-bound outbound credentials.
+        tasks: Store for namespace-owned asynchronous task results.
+        telemetry: Recorder for usage, cost, and runtime metrics.
     """
 
-    name: str
-    settings: Settings
-    logger: logging.Logger
-    redactor: Redactor
-    clients: ClientFactories
-    clock: Clock
-    egress: EgressPolicy
-    credentials: CredentialBroker
-    tasks: TaskStore
-    telemetry: TelemetryRecorder
+    name: Annotated[str, "Namespace prefix used when mounting provider components."]
+    data_classification: Annotated[str, "Namespace-owned lower bound for outbound data."]
+    settings: Annotated[Settings, "Shared runtime settings."]
+    logger: Annotated[logging.Logger, "Logger scoped to this namespace."]
+    redactor: Annotated[Redactor, "Redactor used before exposing diagnostics."]
+    clients: Annotated[ClientFactories, "Registry of external client factories."]
+    clock: Annotated[Clock, "Time provider used by tools and tests."]
+    audit: Annotated[AuditSink, "Append-only audit destination."]
+    egress: Annotated[EgressPolicy, "Policy boundary for approved outbound requests."]
+    credentials: Annotated[CredentialBroker, "Broker for audience-bound outbound credentials."]
+    tasks: Annotated[TaskStore, "Store for namespace-owned asynchronous task results."]
+    telemetry: Annotated[TelemetryRecorder, "Recorder for usage, cost, and runtime metrics."]
 
     def now(self) -> datetime:
         """Return the current time from the namespace clock.
@@ -94,7 +113,19 @@ class NamespaceContext:
         invocation = current_invocation()
         if invocation is None:
             raise RuntimeError("Invocation context is unavailable outside a tool request")
+        require_execution_cell(invocation, namespace=self.name)
         return invocation
+
+    def execution_cell(self) -> ExecutionCell:
+        """Return the active single-use cell bound to this namespace.
+
+        Returns:
+            Active execution-cell metadata.
+        """
+        invocation = current_invocation()
+        if invocation is None:
+            raise RuntimeError("Invocation context is unavailable outside a tool request")
+        return require_execution_cell(invocation, namespace=self.name)
 
     def tenant_scope(self) -> TenantScope:
         """Return storage partitions derived from verified invocation identity.
@@ -133,7 +164,10 @@ class NamespaceContext:
         )
 
     def outbound_url(self, url: str) -> str:
-        """Validate an outbound URL against the namespace egress policy.
+        """Validate a payload-free URL against destination policy.
+
+        Data-bearing operations must use :meth:`downstream` so payload and
+        credential policy cannot be bypassed accidentally.
 
         Args:
             url: Candidate HTTPS destination.
@@ -143,39 +177,80 @@ class NamespaceContext:
         """
         return self.egress.validate_url(url)
 
-    async def downstream_credential(self, audience: str) -> str:
-        """Request an audience-bound credential for the verified caller.
-
-        Args:
-            audience: Exact downstream HTTPS resource URI.
-
-        Returns:
-            Broker-issued downstream credential.
-        """
-        return await self.credentials.credential_for(
-            self.invocation().identity, self.outbound_url(audience)
-        )
-
     async def downstream(
         self,
         client: str,
-        operation: Callable[[], Any | Awaitable[Any]],
+        request: EgressRequest,
+        operation: Callable[[ApprovedEgress], Any | Awaitable[Any]],
         *,
         timeout_seconds: float | None = None,
     ) -> Any:
-        """Execute a downstream call with timeout and circuit-breaker protection.
+        """Authorize and execute one data-aware downstream call.
 
         Args:
             client: Registered dependency name used for readiness and breaker state.
-            operation: Zero-argument sync or async downstream operation.
+            request: Destination, payload, purpose, and optional credential audience.
+            operation: Callback receiving only sanitized approved inputs.
             timeout_seconds: Optional deadline override for this operation.
 
         Returns:
             The downstream operation result.
         """
+        invocation = self.invocation()
+        decision = self.egress.evaluate(
+            invocation,
+            request,
+            minimum_classification=self.data_classification,
+        )
+        if self.settings.enterprise.audit_enabled:
+            await self.audit.append(
+                audit_event(
+                    "egress_authorization",
+                    invocation,
+                    {},
+                    AuditDetails(
+                        allowed=decision.allowed,
+                        reason=decision.reason,
+                        destination_host=decision.host,
+                        egress_method=decision.method,
+                        data_classification=decision.data_classification,
+                        detected_classification=decision.detected_classification,
+                        destination_max_classification=(decision.destination_max_classification),
+                        payload_digest=decision.payload_digest,
+                        findings=decision.findings,
+                        purpose=decision.purpose,
+                    ),
+                )
+            )
+        if not decision.allowed:
+            raise PermissionPortalError(
+                "Outbound request is not authorized.",
+                namespace=self.name,
+                details={
+                    "host": decision.host,
+                    "reason": decision.reason,
+                    "data_classification": decision.data_classification,
+                    "destination_max_classification": (decision.destination_max_classification),
+                    "findings": list(decision.findings),
+                },
+            )
+        credential = (
+            await self.credentials.credential_for(invocation.identity, decision.credential_audience)
+            if decision.credential_audience is not None
+            else None
+        )
+        approved = ApprovedEgress(
+            destination=decision.destination,
+            method=decision.method,
+            purpose=decision.purpose,
+            data_classification=decision.data_classification,
+            payload_digest=decision.payload_digest,
+            payload=decision.payload,
+            credential=credential,
+        )
         return await self.clients.execute(
             client,
-            operation,
+            lambda: operation(approved),
             timeout_seconds=timeout_seconds,
         )
 
@@ -227,14 +302,16 @@ class ToolContribution:
         structured_output: Optional structured-output override.
     """
 
-    function: Callable[..., Any]
-    name: str | None = None
-    title: str | None = None
-    description: str | None = None
-    annotations: ToolAnnotations | None = None
-    icons: tuple[Icon, ...] = ()
-    meta: Mapping[str, Any] = field(default_factory=dict)
-    structured_output: bool | None = None
+    function: Annotated[Callable[..., Any], "Callable implementing the tool."]
+    name: Annotated[str | None, "Optional unqualified MCP tool name."] = None
+    title: Annotated[str | None, "Optional human-readable title."] = None
+    description: Annotated[str | None, "Optional public description."] = None
+    annotations: Annotated[ToolAnnotations | None, "Standard MCP tool behavior hints."] = None
+    icons: Annotated[tuple[Icon, ...], "Optional client-display icons."] = ()
+    meta: Annotated[Mapping[str, Any], "Portal-specific governance metadata."] = field(
+        default_factory=dict
+    )
+    structured_output: Annotated[bool | None, "Optional structured-output override."] = None
 
 
 @dataclass(frozen=True)
@@ -253,15 +330,17 @@ class ResourceContribution:
         meta: Portal-specific governance metadata.
     """
 
-    function: Callable[..., Any]
-    uri: str
-    name: str | None = None
-    title: str | None = None
-    description: str | None = None
-    mime_type: str | None = None
-    icons: tuple[Icon, ...] = ()
-    annotations: Annotations | None = None
-    meta: Mapping[str, Any] = field(default_factory=dict)
+    function: Annotated[Callable[..., Any], "Callable that reads or renders the resource."]
+    uri: Annotated[str, "Stable resource URI or URI template."]
+    name: Annotated[str | None, "Optional unqualified display name."] = None
+    title: Annotated[str | None, "Optional human-readable title."] = None
+    description: Annotated[str | None, "Optional public description."] = None
+    mime_type: Annotated[str | None, "Optional content MIME type."] = None
+    icons: Annotated[tuple[Icon, ...], "Optional client-display icons."] = ()
+    annotations: Annotated[Annotations | None, "Standard MCP resource hints."] = None
+    meta: Annotated[Mapping[str, Any], "Portal-specific governance metadata."] = field(
+        default_factory=dict
+    )
 
     @property
     def is_template(self) -> bool:
@@ -285,11 +364,11 @@ class PromptContribution:
         icons: Optional client-display icons.
     """
 
-    function: Callable[..., Any]
-    name: str | None = None
-    title: str | None = None
-    description: str | None = None
-    icons: tuple[Icon, ...] = ()
+    function: Annotated[Callable[..., Any], "Callable that renders the prompt."]
+    name: Annotated[str | None, "Optional unqualified MCP prompt name."] = None
+    title: Annotated[str | None, "Optional human-readable title."] = None
+    description: Annotated[str | None, "Optional public description."] = None
+    icons: Annotated[tuple[Icon, ...], "Optional client-display icons."] = ()
 
 
 class NamespaceProvider:
@@ -499,9 +578,11 @@ class NamespaceStatus:
         details: Optional redacted-safe diagnostic details.
     """
 
-    state: NamespaceState
-    message: str
-    details: Mapping[str, Any] = field(default_factory=dict)
+    state: Annotated[NamespaceState, "Machine-readable namespace state."]
+    message: Annotated[str, "Human-readable status summary."]
+    details: Annotated[Mapping[str, Any], "Optional redacted-safe diagnostic details."] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         """Normalize status details after dataclass initialization."""
@@ -533,22 +614,41 @@ class Namespace:
         description: Human-readable namespace purpose.
         tags: Stable metadata tags for filtering and documentation.
         health_check: Optional callback that reports namespace status.
+        owner: Owning team or service.
+        version: Namespace contract version.
+        maturity: Namespace lifecycle maturity.
+        data_classification: Highest expected data classification.
+        required_scopes: Code-owned baseline access scopes.
+        timeout_seconds: Optional namespace timeout metadata.
+        dependencies: Registered external dependency names.
+        deprecation_date: Optional planned deprecation date.
+        replacement: Optional replacement namespace name.
     """
 
-    name: str
-    create: NamespaceFactory
-    description: str = ""
-    tags: frozenset[str] = field(default_factory=frozenset)
-    health_check: NamespaceHealthCheck | None = None
-    owner: str = "platform"
-    version: str = "1.0.0"
-    maturity: Literal["experimental", "beta", "stable", "deprecated"] = "stable"
-    data_classification: str = "internal"
-    required_scopes: frozenset[str] = field(default_factory=frozenset)
-    timeout_seconds: float | None = None
-    dependencies: tuple[str, ...] = ()
-    deprecation_date: str | None = None
-    replacement: str | None = None
+    name: Annotated[str, "Prefix used when mounting the namespace into the parent server."]
+    create: Annotated[
+        NamespaceFactory, "Factory that builds the namespace child server from shared context."
+    ]
+    description: Annotated[str, "Human-readable namespace purpose."] = ""
+    tags: Annotated[frozenset[str], "Stable metadata tags for filtering and documentation."] = (
+        field(default_factory=frozenset)
+    )
+    health_check: Annotated[
+        NamespaceHealthCheck | None, "Optional callback that reports namespace status."
+    ] = None
+    owner: Annotated[str, "Owning team or service."] = "platform"
+    version: Annotated[str, "Namespace contract version."] = "1.0.0"
+    maturity: Annotated[
+        Literal["experimental", "beta", "stable", "deprecated"], "Namespace lifecycle maturity."
+    ] = "stable"
+    data_classification: Annotated[str, "Highest expected data classification."] = "internal"
+    required_scopes: Annotated[frozenset[str], "Code-owned baseline access scopes."] = field(
+        default_factory=frozenset
+    )
+    timeout_seconds: Annotated[float | None, "Optional namespace timeout metadata."] = None
+    dependencies: Annotated[tuple[str, ...], "Registered external dependency names."] = ()
+    deprecation_date: Annotated[str | None, "Optional planned deprecation date."] = None
+    replacement: Annotated[str | None, "Optional replacement namespace name."] = None
 
     def __post_init__(self) -> None:
         """Normalize namespace metadata after dataclass initialization."""
@@ -579,19 +679,25 @@ class NamespaceMetadata:
         replacement: Optional replacement namespace name.
     """
 
-    name: str
-    description: str = ""
-    tags: frozenset[str] = field(default_factory=frozenset)
-    health_check: NamespaceHealthCheck | None = None
-    owner: str = "platform"
-    version: str = "1.0.0"
-    maturity: Literal["experimental", "beta", "stable", "deprecated"] = "stable"
-    data_classification: str = "internal"
-    required_scopes: frozenset[str] = field(default_factory=frozenset)
-    timeout_seconds: float | None = None
-    dependencies: tuple[str, ...] = ()
-    deprecation_date: str | None = None
-    replacement: str | None = None
+    name: Annotated[str, "Prefix used when mounting the namespace."]
+    description: Annotated[str, "Human-readable namespace purpose."] = ""
+    tags: Annotated[frozenset[str], "Stable metadata tags."] = field(default_factory=frozenset)
+    health_check: Annotated[NamespaceHealthCheck | None, "Optional namespace health callback."] = (
+        None
+    )
+    owner: Annotated[str, "Owning team or service."] = "platform"
+    version: Annotated[str, "Namespace contract version."] = "1.0.0"
+    maturity: Annotated[
+        Literal["experimental", "beta", "stable", "deprecated"], "Namespace lifecycle maturity."
+    ] = "stable"
+    data_classification: Annotated[str, "Highest expected data classification."] = "internal"
+    required_scopes: Annotated[frozenset[str], "Code-owned baseline access scopes."] = field(
+        default_factory=frozenset
+    )
+    timeout_seconds: Annotated[float | None, "Optional namespace timeout metadata."] = None
+    dependencies: Annotated[tuple[str, ...], "Registered external dependency names."] = ()
+    deprecation_date: Annotated[str | None, "Optional planned deprecation date."] = None
+    replacement: Annotated[str | None, "Optional replacement namespace name."] = None
 
     def __post_init__(self) -> None:
         """Normalize iterable metadata after dataclass initialization."""
@@ -609,8 +715,8 @@ class NamespaceRuntime:
         context: Runtime context built for the namespace.
     """
 
-    namespace: Namespace
-    context: NamespaceContext
+    namespace: Annotated[Namespace, "Namespace manifest."]
+    context: Annotated[NamespaceContext, "Runtime context built for the namespace."]
 
 
 _NAMESPACE_REGISTRY: dict[str, Namespace] = {}
@@ -698,9 +804,8 @@ def build_namespace_runtimes(
             settings.mongodb.connection_string,
         )
     )
-    shared_egress = dependencies.egress_policy or EgressPolicy(
-        allowed_hosts=frozenset(host.lower() for host in settings.enterprise.egress_allowed_hosts)
-    )
+    shared_audit = dependencies.audit_sink or LoggingAuditSink()
+    shared_egress = dependencies.egress_policy or _default_egress_policy(settings, shared_redactor)
     shared_credentials = dependencies.credential_broker or RejectingCredentialBroker()
     shared_tasks = dependencies.task_store or MemoryTaskStore(
         max_ttl_seconds=settings.enterprise.task_max_ttl_seconds,
@@ -712,6 +817,7 @@ def build_namespace_runtimes(
         clients=shared_clients,
         redactor=shared_redactor,
         clock=dependencies.clock,
+        audit_sink=shared_audit,
         egress_policy=shared_egress,
         credential_broker=shared_credentials,
         task_store=shared_tasks,
@@ -748,12 +854,15 @@ def build_namespace_context(
     """
     return NamespaceContext(
         name=namespace.name,
+        data_classification=namespace.data_classification,
         settings=settings,
         logger=logging.getLogger(f"mcp_portal.namespaces.{namespace.name}"),
         redactor=dependencies.redactor or Redactor(),
         clients=dependencies.clients or default_client_factories(settings),
         clock=dependencies.clock or utc_now,
-        egress=dependencies.egress_policy or EgressPolicy(),
+        audit=dependencies.audit_sink or LoggingAuditSink(),
+        egress=dependencies.egress_policy
+        or _default_egress_policy(settings, dependencies.redactor or Redactor()),
         credentials=dependencies.credential_broker or RejectingCredentialBroker(),
         tasks=dependencies.task_store
         or MemoryTaskStore(
@@ -761,6 +870,24 @@ def build_namespace_context(
             max_per_owner=settings.enterprise.task_max_concurrent_per_subject,
         ),
         telemetry=dependencies.telemetry or create_telemetry_recorder(settings),
+    )
+
+
+def _default_egress_policy(settings: Settings, redactor: Redactor) -> EgressPolicy:
+    """Build the configured data-aware egress policy.
+
+    Args:
+        settings: Deployment settings containing destination rules.
+        redactor: Redactor containing deployment-known literal secrets.
+
+    Returns:
+        Egress policy with structured payload inspection.
+    """
+    return EgressPolicy(
+        allowed_hosts=frozenset(settings.enterprise.egress_allowed_hosts),
+        destination_classifications=(settings.enterprise.egress_destination_classifications),
+        sensitive_field_action=settings.enterprise.egress_sensitive_field_action,
+        inspector=StructuredPayloadInspector(redactor),
     )
 
 

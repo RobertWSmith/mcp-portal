@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Annotated
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -43,6 +44,30 @@ from mcp_portal.config.models import (
 )
 
 
+def _production_url_problem(label: str, value: str) -> str | None:
+    """Return a production-safety problem for an externally configured URL.
+
+    Args:
+        label: Human-readable configuration label.
+        value: Configured URL value.
+
+    Returns:
+        Safety problem text, or None when the URL is safe.
+    """
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return f"{label} must be an absolute HTTP(S) URL"
+    if parsed.username or parsed.password or parsed.fragment:
+        return f"{label} must not contain credentials or a fragment"
+    if parsed.scheme != "https" and parsed.hostname not in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }:
+        return f"{label} must use HTTPS outside loopback"
+    return None
+
+
 @dataclass(frozen=True)
 class Settings:
     """Runtime settings grouped by namespace or provider boundary.
@@ -57,28 +82,53 @@ class Settings:
         authorization: Authorization policy applied by production middleware.
         middleware: Cross-cutting production middleware settings.
         http: HTTP and ASGI deployment settings.
+        enterprise: Cross-cutting enterprise control-plane settings.
         namespace_discovery: Namespace discovery behavior.
         observability: Observability export metadata.
         database: Preferred database backend settings.
         mongodb: MongoDB connector settings.
     """
 
-    openai: OpenAISettings
-    model_provider: ModelProviderName = "openai"
-    azure_openai: AzureOpenAISettings = field(default_factory=AzureOpenAISettings)
-    azure_identity: AzureIdentitySettings = field(default_factory=AzureIdentitySettings)
-    health: HealthSettings = field(default_factory=HealthSettings)
-    auth: AuthSettings = field(default_factory=AuthSettings)
-    authorization: AuthorizationSettings = field(default_factory=AuthorizationSettings)
-    middleware: MiddlewareSettings = field(default_factory=MiddlewareSettings)
-    http: HttpSettings = field(default_factory=HttpSettings)
-    enterprise: EnterpriseSettings = field(default_factory=EnterpriseSettings)
-    namespace_discovery: NamespaceDiscoverySettings = field(
-        default_factory=NamespaceDiscoverySettings
+    openai: Annotated[OpenAISettings, "Settings for direct OpenAI platform calls."]
+    model_provider: Annotated[
+        ModelProviderName, "Active model provider used by generic model settings."
+    ] = "openai"
+    azure_openai: Annotated[AzureOpenAISettings, "Settings for Azure OpenAI model calls."] = field(
+        default_factory=AzureOpenAISettings
     )
-    observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
-    database: DatabaseSettings = field(default_factory=DatabaseSettings)
-    mongodb: MongoDBSettings = field(default_factory=MongoDBSettings)
+    azure_identity: Annotated[AzureIdentitySettings, "Azure Identity environment settings."] = (
+        field(default_factory=AzureIdentitySettings)
+    )
+    health: Annotated[HealthSettings, "Settings used by the health namespace."] = field(
+        default_factory=HealthSettings
+    )
+    auth: Annotated[AuthSettings, "Authentication settings used by HTTP production transports."] = (
+        field(default_factory=AuthSettings)
+    )
+    authorization: Annotated[
+        AuthorizationSettings, "Authorization policy applied by production middleware."
+    ] = field(default_factory=AuthorizationSettings)
+    middleware: Annotated[MiddlewareSettings, "Cross-cutting production middleware settings."] = (
+        field(default_factory=MiddlewareSettings)
+    )
+    http: Annotated[HttpSettings, "HTTP and ASGI deployment settings."] = field(
+        default_factory=HttpSettings
+    )
+    enterprise: Annotated[
+        EnterpriseSettings, "Cross-cutting enterprise control-plane settings."
+    ] = field(default_factory=EnterpriseSettings)
+    namespace_discovery: Annotated[NamespaceDiscoverySettings, "Namespace discovery behavior."] = (
+        field(default_factory=NamespaceDiscoverySettings)
+    )
+    observability: Annotated[ObservabilitySettings, "Observability export metadata."] = field(
+        default_factory=ObservabilitySettings
+    )
+    database: Annotated[DatabaseSettings, "Preferred database backend settings."] = field(
+        default_factory=DatabaseSettings
+    )
+    mongodb: Annotated[MongoDBSettings, "MongoDB connector settings."] = field(
+        default_factory=MongoDBSettings
+    )
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None, override: bool = False) -> "Settings":
@@ -249,25 +299,81 @@ class Settings:
         if self.enterprise.require_tenant and not self.auth.enabled:
             problems.append("tenant isolation requires an authentication provider")
 
-        if self.auth.provider == "jwt":
-            if not self.auth.jwt_issuer:
-                problems.append("JWT issuer is required")
-            if not self.auth.jwt_audience:
-                problems.append("JWT audience is required")
-            if not self.auth.resource_server_url:
-                problems.append("canonical resource server URL is required")
+        if self.auth.provider in {"oauth", "jwt"}:
+            problems.extend(self._production_jwt_problems())
 
+        if self.auth.provider == "oauth":
+            problems.extend(self._production_oauth_problems())
+
+        if self.auth.provider == "static":
+            problems.append("static bearer tokens are not allowed in production")
+
+        problems.extend(self._production_auth_url_problems())
+        return problems
+
+    def _production_jwt_problems(self) -> list[str]:
+        """Return verification problems shared by JWT and OAuth modes.
+
+        Returns:
+            Human-readable JWT verification problems.
+        """
+        problems: list[str] = []
+        if not self.auth.jwt_issuer:
+            problems.append("JWT issuer is required")
+        if not self.auth.jwt_audience:
+            problems.append("JWT audience is required")
+        if not self.auth.resource_server_url:
+            problems.append("canonical resource server URL is required")
+        if self.auth.jwt_algorithm.startswith("HS"):
+            problems.append("symmetric JWT algorithms are not allowed in production")
+        if self.auth.jwt_clock_skew_seconds < 0:
+            problems.append("JWT clock skew must be non-negative")
+        return problems
+
+    def _production_oauth_problems(self) -> list[str]:
+        """Return OAuth discovery and audience-binding problems.
+
+        Returns:
+            Human-readable OAuth configuration problems.
+        """
+        problems: list[str] = []
+        if not self.auth.authorization_server_url:
+            problems.append("OAuth authorization server URL is required")
+        if not self.auth.jwt_jwks_uri:
+            problems.append("OAuth requires a JWKS URI for signing-key rotation")
+        if self.auth.jwt_public_key:
+            problems.append("OAuth does not allow a static JWT verification key")
+        if (
+            self.auth.jwt_audience
+            and self.auth.resource_server_url
+            and self.auth.jwt_audience != self.auth.resource_server_url
+        ):
+            problems.append("OAuth JWT audience must equal the canonical resource server URL")
         if self.auth.resource_server_url:
-            parsed = urlsplit(self.auth.resource_server_url)
-            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                problems.append("resource server URL must be an absolute HTTP(S) URL")
-            elif parsed.scheme != "https" and parsed.hostname not in {
-                "localhost",
-                "127.0.0.1",
-                "::1",
-            }:
-                problems.append("resource server URL must use HTTPS outside loopback")
+            resource_path = urlsplit(self.auth.resource_server_url).path.rstrip("/")
+            expected_path = f"/{self.http.path.strip('/')}"
+            if not resource_path.endswith(expected_path):
+                problems.append("resource server URL must end in the configured MCP HTTP path")
+        return problems
 
+    def _production_auth_url_problems(self) -> list[str]:
+        """Return safety problems for authentication URLs.
+
+        Returns:
+            Human-readable authentication URL problems.
+        """
+        configured_urls = (
+            ("resource server URL", self.auth.resource_server_url),
+            ("authorization server URL", self.auth.authorization_server_url),
+            ("JWT issuer URL", self.auth.jwt_issuer),
+            ("JWT JWKS URI", self.auth.jwt_jwks_uri),
+        )
+        problems: list[str] = []
+        for label, value in configured_urls:
+            if value:
+                problem = _production_url_problem(label, value)
+                if problem:
+                    problems.append(problem)
         return problems
 
     def _production_runtime_problems(self) -> list[str]:
@@ -292,6 +398,12 @@ class Settings:
             problems.append("circuit-breaker failure threshold must be positive")
         if self.enterprise.circuit_breaker_recovery_seconds <= 0:
             problems.append("circuit-breaker recovery time must be positive")
+        supported_classifications = {"public", "internal", "confidential", "restricted"}
+        if any(
+            classification not in supported_classifications
+            for classification in self.enterprise.execution_remote_classifications
+        ):
+            problems.append("execution-cell remote classifications must be supported")
 
         return problems
 

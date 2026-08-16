@@ -7,7 +7,7 @@ import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
 from opentelemetry import metrics
 
@@ -32,25 +32,39 @@ class UsageMeasurement:
         pricing_version: Optional pricing table or contract version.
     """
 
-    provider: str = field(metadata={"description": "External provider or internal cost center."})
-    service: str = field(metadata={"description": "Metered service or product family."})
-    operation: str = field(metadata={"description": "Low-cardinality operation name."})
-    quantity: int | float | Decimal | str = field(metadata={"description": "Consumed quantity."})
-    unit: str = field(metadata={"description": "Unit of the consumed quantity."})
-    namespace: str | None = field(
+    provider: Annotated[str, "External provider or internal cost center."] = field(
+        metadata={"description": "External provider or internal cost center."}
+    )
+    service: Annotated[str, "Metered service or product family."] = field(
+        metadata={"description": "Metered service or product family."}
+    )
+    operation: Annotated[str, "Low-cardinality operation name."] = field(
+        metadata={"description": "Low-cardinality operation name."}
+    )
+    quantity: Annotated[int | float | Decimal | str, "Consumed quantity."] = field(
+        metadata={"description": "Consumed quantity."}
+    )
+    unit: Annotated[str, "Unit of the consumed quantity."] = field(
+        metadata={"description": "Unit of the consumed quantity."}
+    )
+    namespace: Annotated[
+        str | None, "Optional namespace reporting consumption. Trusted namespace contexts"
+    ] = field(
         default=None,
         metadata={
-            "description": "Optional namespace reporting consumption. Trusted namespace contexts."
+            "description": "Optional namespace reporting consumption. Trusted namespace contexts"
         },
     )
-    sku: str | None = field(
+    sku: Annotated[str | None, "Optional model, deployment, or provider SKU."] = field(
         default=None, metadata={"description": "Optional model, deployment, or provider SKU."}
     )
-    estimated_cost: int | float | Decimal | str | None = field(
-        default=None, metadata={"description": "Optional estimated monetary cost."}
+    estimated_cost: Annotated[
+        int | float | Decimal | str | None, "Optional estimated monetary cost."
+    ] = field(default=None, metadata={"description": "Optional estimated monetary cost."})
+    currency: Annotated[str | None, "Optional currency code."] = field(
+        default=None, metadata={"description": "Optional currency code."}
     )
-    currency: str | None = field(default=None, metadata={"description": "Optional currency code."})
-    pricing_version: str | None = field(
+    pricing_version: Annotated[str | None, "Optional pricing table or contract version."] = field(
         default=None, metadata={"description": "Optional pricing table or contract version."}
     )
 
@@ -78,34 +92,56 @@ class UsageRecord:
         pricing_version: Pricing table or contract version used for the estimate.
     """
 
-    occurred_at: str = field(metadata={"description": "UTC event timestamp."})
-    request_id: str = field(metadata={"description": "Server-generated invocation identifier."})
-    tool_name: str = field(metadata={"description": "Fully-qualified MCP tool name."})
-    namespace: str = field(metadata={"description": "Namespace reporting consumption."})
-    subject: str | None = field(
+    occurred_at: Annotated[str, "UTC event timestamp."] = field(
+        metadata={"description": "UTC event timestamp."}
+    )
+    request_id: Annotated[str, "Server-generated invocation identifier."] = field(
+        metadata={"description": "Server-generated invocation identifier."}
+    )
+    tool_name: Annotated[str, "Fully-qualified MCP tool name."] = field(
+        metadata={"description": "Fully-qualified MCP tool name."}
+    )
+    namespace: Annotated[str, "Namespace reporting consumption."] = field(
+        metadata={"description": "Namespace reporting consumption."}
+    )
+    subject: Annotated[str | None, "Authenticated human or workload subject."] = field(
         metadata={"description": "Authenticated human or workload subject."}
     )
-    tenant_id: str | None = field(metadata={"description": "Trusted tenant partition."})
-    client_id: str | None = field(metadata={"description": "Calling OAuth client identifier."})
-    provider: str = field(metadata={"description": "External provider or internal cost center."})
-    service: str = field(metadata={"description": "Metered service or product family."})
-    operation: str = field(metadata={"description": "Low-cardinality operation name."})
-    sku: str | None = field(
+    tenant_id: Annotated[str | None, "Trusted tenant partition."] = field(
+        metadata={"description": "Trusted tenant partition."}
+    )
+    client_id: Annotated[str | None, "Calling OAuth client identifier."] = field(
+        metadata={"description": "Calling OAuth client identifier."}
+    )
+    provider: Annotated[str, "External provider or internal cost center."] = field(
+        metadata={"description": "External provider or internal cost center."}
+    )
+    service: Annotated[str, "Metered service or product family."] = field(
+        metadata={"description": "Metered service or product family."}
+    )
+    operation: Annotated[str, "Low-cardinality operation name."] = field(
+        metadata={"description": "Low-cardinality operation name."}
+    )
+    sku: Annotated[str | None, "Optional model, deployment, or provider SKU."] = field(
         metadata={"description": "Optional model, deployment, or provider SKU."}
     )
-    quantity: str = field(
+    quantity: Annotated[str, "Metered quantity represented as an exact decimal string."] = field(
         metadata={"description": "Metered quantity represented as an exact decimal string."}
     )
-    unit: str = field(
+    unit: Annotated[str, "Unit such as input_token, request, document, or compute_second."] = field(
         metadata={"description": "Unit such as input_token, request, document, or compute_second."}
     )
-    estimated_cost: str | None = field(
+    estimated_cost: Annotated[
+        str | None, "Optional estimated cost represented as an exact decimal string."
+    ] = field(
         metadata={"description": "Optional estimated cost represented as an exact decimal string."}
     )
-    currency: str = field(metadata={"description": "ISO-style currency code for estimated cost."})
-    pricing_version: str | None = field(
-        metadata={"description": "Pricing table or contract version used for the estimate."}
+    currency: Annotated[str, "ISO-style currency code for estimated cost."] = field(
+        metadata={"description": "ISO-style currency code for estimated cost."}
     )
+    pricing_version: Annotated[
+        str | None, "Pricing table or contract version used for the estimate."
+    ] = field(metadata={"description": "Pricing table or contract version used for the estimate."})
 
     @classmethod
     def create(

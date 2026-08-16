@@ -16,14 +16,29 @@ do not leak into namespace business logic.
    Implemented tenant façades provide stable non-reversible partition tokens, reserved
    MongoDB metadata and filters, SQLAlchemy bind parameters, subject-scoped chat sessions,
    cache/vector wrappers, and task methods that never accept caller-supplied ownership.
+   Semantic-cache entries additionally carry opaque tenant and authorization partitions. Every
+   similarity lookup is constrained with backend metadata filters covering the verified subject,
+   client, entitlements, authentication method, tool, and namespace-owned policy version.
    Cross-tenant administrative tools must opt in with `tenant_override` and require
    `tenant.admin`.
 3. **Outbound trust boundary** — require an audience-bound credential broker and validate
    outbound HTTPS destinations against an explicit hostname policy. Inbound MCP tokens are
    never exposed through the namespace context.
+
+   Implemented data-aware egress binds every downstream request to verified actor/client/tool
+   context, the namespace classification floor, a stable purpose, HTTP method, destination
+   ceiling, structured payload inspection, and a same-origin credential audience. Sensitive
+   fields block by default or are removed before the approved callback receives the payload;
+   sanitized decisions are audited before credential exchange.
 4. **Bounded execution** — apply per-tenant/subject/tool quota keys, concurrency admission,
    deadlines, and response-size limits. Replace the memory quota backend with Redis or an
    API-gateway adapter for horizontally scaled deployments.
+
+   Implemented execution cells create a single-use request/tool/identity/namespace lease after
+   admission, reject nesting and expired inherited contexts, bind namespace capabilities to the
+   active cell, and correlate cell start/completion audit evidence. Restricted namespaces require
+   the existing remote provider process or network boundary by default; local cells are explicitly
+   treated as logical isolation for trusted code rather than an OS sandbox.
 
 ## Phase 2: Governed capabilities
 
