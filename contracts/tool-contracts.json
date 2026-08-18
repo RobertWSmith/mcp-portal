@@ -1,5 +1,6 @@
 {
   "health_ping": "83ef56e46ac446184a26f6f884f33067eb23afab246b088b225d9dbd45f6ff2e",
   "health_runtime_config": "28aecccf61fd3a9638c48de4c0e4a9cc2b3ddeda2bd4a66b1d0d254f6799cbd5",
-  "public_duckduckgo_search": "ad0c4d8154e5d6df75da71212149d14ba87b18d0dc573ba2df829d3711973b8f"
+  "public_duckduckgo_search": "93e6443103330850beba68832529a6e6ecf113f8c5123dcf4dc67cb0e6db12f5",
+  "public_resolve_web_link": "fdf2a4ff5f2ee62503d3566fefb85e2ba315067484ef5dc76a57fc55f955ef29"
 }
