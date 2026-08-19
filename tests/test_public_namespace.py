@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastmcp import Client
 import httpx
 import pytest
@@ -19,6 +21,14 @@ class FakeDuckDuckGoSearch:
     async def ainvoke(self, input: str) -> str:
         """Return a stable result for the supplied query."""
         return f"Result for {input}: https://example.com"
+
+
+class FailingDuckDuckGoSearch:
+    """Raise a deterministic provider failure for logging tests."""
+
+    async def ainvoke(self, input: str) -> str:
+        """Raise a provider error without returning search content."""
+        raise RuntimeError("provider unavailable")
 
 
 async def test_public_duckduckgo_search_uses_langchain_tool(monkeypatch) -> None:
@@ -51,6 +61,37 @@ async def test_public_search_contract_requires_no_namespace_scope() -> None:
     assert search.annotations is not None
     assert search.annotations.readOnlyHint is True
     assert search.annotations.openWorldHint is True
+
+
+async def test_public_search_logs_sanitized_provider_failure(monkeypatch, caplog) -> None:
+    """Verify search failures emit structured diagnostics without the search query."""
+    monkeypatch.setattr(
+        public_namespace,
+        "_create_search_tool",
+        lambda: FailingDuckDuckGoSearch(),
+    )
+    caplog.set_level(logging.ERROR, logger="mcp_portal.namespaces.public")
+
+    async with Client(create_mcp(create_test_settings())) as client:
+        with pytest.raises(Exception, match="DuckDuckGo search could not be completed"):
+            await client.call_tool("public_duckduckgo_search", {"query": "sensitive query text"})
+
+    record = next(
+        item
+        for item in caplog.records
+        if getattr(item, "portal_operation", None) == "duckduckgo_search"
+    )
+    assert record.portal_error_code == "upstream_error"
+    assert record.portal_error_cause_type == "RuntimeError"
+    assert record.portal_request_id
+    assert record.portal_tool_name == "public_duckduckgo_search"
+    assert record.portal_error_details == {
+        "error_type": "RuntimeError",
+        "failure_reason": "provider_error",
+        "provider": "duckduckgo",
+        "query_length": 20,
+    }
+    assert "sensitive query text" not in caplog.text
 
 
 async def test_public_resolve_web_link_returns_scrubbed_content(monkeypatch) -> None:
@@ -173,26 +214,31 @@ async def test_fetch_web_page_validates_redirects_and_reads_html(monkeypatch) ->
 
 
 @pytest.mark.parametrize(
-    ("response", "error", "message"),
+    ("response", "error", "message", "failure_reason"),
     [
         (
             httpx.Response(404, text="missing"),
             UpstreamPortalError,
-            "unsuccessful HTTP status",
+            "not found",
+            "page_not_found",
         ),
         (
             httpx.Response(200, headers={"content-type": "application/pdf"}, content=b"pdf"),
             ValidationPortalError,
             "HTML document",
+            "unsupported_content_type",
         ),
         (
             httpx.Response(200, content=b"x" * (public_namespace._MAX_RESPONSE_BYTES + 1)),
             UpstreamPortalError,
             "response-size limit",
+            "response_too_large",
         ),
     ],
 )
-async def test_fetch_web_page_rejects_bad_responses(monkeypatch, response, error, message) -> None:
+async def test_fetch_web_page_rejects_bad_responses(
+    monkeypatch, response, error, message, failure_reason
+) -> None:
     """Verify HTTP status, media type, and byte limits fail with stable portal errors."""
 
     def client_factory(request_hook):
@@ -202,8 +248,84 @@ async def test_fetch_web_page_rejects_bad_responses(monkeypatch, response, error
         )
 
     monkeypatch.setattr(public_namespace, "_create_http_client", client_factory)
-    with pytest.raises(error, match=message):
+    with pytest.raises(error, match=message) as exc_info:
         await public_namespace._fetch_web_page("https://example.com", lambda url: url)
+
+    assert exc_info.value.details["failure_reason"] == failure_reason
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message", "failure_reason"),
+    [
+        (401, "requires authentication", "authentication_required"),
+        (403, "denied access", "access_forbidden"),
+        (410, "no longer available", "page_gone"),
+        (429, "rate limit", "rate_limited"),
+        (422, "rejected the request", "client_error"),
+        (503, "server returned an error", "server_error"),
+    ],
+)
+def test_http_status_error_classifies_failures(status_code, message, failure_reason) -> None:
+    """Verify HTTP failures expose stable status and reason diagnostics."""
+    response = httpx.Response(
+        status_code,
+        request=httpx.Request("GET", "https://example.com/private?token=secret"),
+    )
+
+    error = public_namespace._http_status_error(response)
+
+    assert message in error.message
+    assert error.details == {
+        "failure_reason": failure_reason,
+        "host": "example.com",
+        "redirect_count": 0,
+        "status_class": f"{status_code // 100}xx",
+        "status_code": status_code,
+    }
+    assert "token" not in repr(error.details)
+
+
+async def test_public_resolver_logs_structured_http_failure(monkeypatch, caplog) -> None:
+    """Verify resolver failures log status diagnostics without paths or query strings."""
+
+    async def fake_fetch(url, validate_url):
+        raise UpstreamPortalError(
+            "Web page was not found.",
+            details={
+                "failure_reason": "page_not_found",
+                "host": "example.com",
+                "redirect_count": 1,
+                "status_class": "4xx",
+                "status_code": 404,
+            },
+        )
+
+    monkeypatch.setattr(public_namespace, "_fetch_web_page", fake_fetch)
+    caplog.set_level(logging.ERROR, logger="mcp_portal.namespaces.public")
+
+    async with Client(create_mcp(create_test_settings())) as client:
+        with pytest.raises(Exception, match="Web page was not found"):
+            await client.call_tool(
+                "public_resolve_web_link",
+                {"url": "https://example.com/private?token=secret"},
+            )
+
+    record = next(
+        item
+        for item in caplog.records
+        if getattr(item, "portal_operation", None) == "resolve_web_link"
+    )
+    assert record.portal_error_details == {
+        "failure_reason": "page_not_found",
+        "host": "example.com",
+        "redirect_count": 1,
+        "status_class": "4xx",
+        "status_code": 404,
+    }
+    assert record.portal_request_id
+    assert record.portal_tool_name == "public_resolve_web_link"
+    assert "/private" not in caplog.text
+    assert "token=secret" not in caplog.text
 
 
 async def test_public_resolver_contract_requires_no_namespace_scope() -> None:

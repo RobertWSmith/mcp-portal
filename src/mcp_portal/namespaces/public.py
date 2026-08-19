@@ -123,6 +123,100 @@ def _create_http_client(
     )
 
 
+def _http_status_error(response: httpx.Response) -> UpstreamPortalError:
+    """Build a diagnostic error for an unsuccessful web response.
+
+    Args:
+        response: Final HTTP response returned by the target web server.
+
+    Returns:
+        Sanitized upstream error with a stable failure classification.
+    """
+    status_code = response.status_code
+    if status_code == 404:
+        message, failure_reason = "Web page was not found.", "page_not_found"
+    elif status_code == 410:
+        message, failure_reason = "Web page is no longer available.", "page_gone"
+    elif status_code == 401:
+        message, failure_reason = "Web page requires authentication.", "authentication_required"
+    elif status_code == 403:
+        message, failure_reason = "Web page denied access.", "access_forbidden"
+    elif status_code == 429:
+        message, failure_reason = "Web page rate limit was exceeded.", "rate_limited"
+    elif 400 <= status_code < 500:
+        message, failure_reason = "Web page rejected the request.", "client_error"
+    else:
+        message, failure_reason = "Web page server returned an error.", "server_error"
+    return UpstreamPortalError(
+        message,
+        details={
+            "failure_reason": failure_reason,
+            "host": response.url.host,
+            "redirect_count": len(response.history),
+            "status_class": f"{status_code // 100}xx",
+            "status_code": status_code,
+        },
+    )
+
+
+async def _read_html_response(
+    response: httpx.Response, validate_url: Callable[[str], str]
+) -> _FetchedPage:
+    """Validate and read one bounded HTML response stream.
+
+    Args:
+        response: Final streamed HTTP response.
+        validate_url: Portal policy function applied to the final URL.
+
+    Returns:
+        Bounded HTML response and its validated metadata.
+    """
+    if response.status_code >= 400:
+        raise _http_status_error(response)
+    content_type = response.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if content_type not in {"", "text/html", "application/xhtml+xml"}:
+        raise ValidationPortalError(
+            "Web link must resolve to an HTML document.",
+            details={
+                "content_type": content_type,
+                "failure_reason": "unsupported_content_type",
+                "host": response.url.host,
+                "status_code": response.status_code,
+            },
+        )
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in response.aiter_bytes():
+        size += len(chunk)
+        if size > _MAX_RESPONSE_BYTES:
+            raise UpstreamPortalError(
+                "Web page exceeds the resolver's response-size limit.",
+                details={
+                    "failure_reason": "response_too_large",
+                    "host": response.url.host,
+                    "max_bytes": _MAX_RESPONSE_BYTES,
+                    "status_code": response.status_code,
+                },
+            )
+        chunks.append(chunk)
+    if not chunks:
+        raise UpstreamPortalError(
+            "Web page returned an empty document.",
+            details={
+                "failure_reason": "empty_document",
+                "host": response.url.host,
+                "status_code": response.status_code,
+            },
+        )
+    resolved_url = validate_url(str(response.url))
+    return _FetchedPage(
+        url=resolved_url,
+        content_type=content_type or "text/html",
+        encoding=response.encoding or "utf-8",
+        body=b"".join(chunks),
+    )
+
+
 async def _fetch_web_page(url: str, validate_url: Callable[[str], str]) -> _FetchedPage:
     """Fetch one HTML page while validating every redirect destination.
 
@@ -147,42 +241,39 @@ async def _fetch_web_page(url: str, validate_url: Callable[[str], str]) -> _Fetc
             _create_http_client(validate_request) as client,
             client.stream("GET", url) as response,
         ):
-            if response.status_code >= 400:
-                raise UpstreamPortalError(
-                    "Web page returned an unsuccessful HTTP status.",
-                    details={"status_code": response.status_code},
-                )
-            content_type = (
-                response.headers.get("content-type", "").partition(";")[0].strip().lower()
-            )
-            if content_type not in {"", "text/html", "application/xhtml+xml"}:
-                raise ValidationPortalError(
-                    "Web link must resolve to an HTML document.",
-                    details={"content_type": content_type},
-                )
-            chunks: list[bytes] = []
-            size = 0
-            async for chunk in response.aiter_bytes():
-                size += len(chunk)
-                if size > _MAX_RESPONSE_BYTES:
-                    raise UpstreamPortalError(
-                        "Web page exceeds the resolver's response-size limit.",
-                        details={"max_bytes": _MAX_RESPONSE_BYTES},
-                    )
-                chunks.append(chunk)
-            resolved_url = validate_url(str(response.url))
-            return _FetchedPage(
-                url=resolved_url,
-                content_type=content_type or "text/html",
-                encoding=response.encoding or "utf-8",
-                body=b"".join(chunks),
-            )
+            return await _read_html_response(response, validate_url)
     except PortalError:
         raise
     except httpx.TimeoutException as exc:
-        raise UpstreamPortalError("Web page request timed out.", cause=exc) from exc
+        raise UpstreamPortalError(
+            "Web page request timed out.",
+            details={
+                "failure_reason": "timeout",
+                "host": httpx.URL(url).host,
+                "error_type": type(exc).__name__,
+            },
+            cause=exc,
+        ) from exc
+    except httpx.TooManyRedirects as exc:
+        raise UpstreamPortalError(
+            "Web page exceeded the redirect limit.",
+            details={
+                "failure_reason": "too_many_redirects",
+                "host": httpx.URL(url).host,
+                "error_type": type(exc).__name__,
+            },
+            cause=exc,
+        ) from exc
     except httpx.HTTPError as exc:
-        raise UpstreamPortalError("Web page could not be retrieved.", cause=exc) from exc
+        raise UpstreamPortalError(
+            "Web page could not be retrieved.",
+            details={
+                "failure_reason": "network_error",
+                "host": httpx.URL(url).host,
+                "error_type": type(exc).__name__,
+            },
+            cause=exc,
+        ) from exc
 
 
 def _scrub_html(
@@ -232,6 +323,39 @@ def _scrub_html(
     if truncated:
         content = content[:max_characters].rstrip()
     return title, content, truncated
+
+
+def _log_public_tool_error(context: NamespaceContext, operation: str, error: PortalError) -> None:
+    """Write one structured, redacted public-tool failure record.
+
+    Args:
+        context: Public namespace context providing logging and redaction.
+        operation: Stable public tool operation name.
+        error: Sanitized portal error to record.
+    """
+    details = context.public_snapshot(error.details)
+    invocation = context.invocation()
+    cause = error.__cause__
+    cause_type = type(cause).__name__ if cause is not None else type(error).__name__
+    context.logger.error(
+        "Public tool failure request_id=%s operation=%s code=%s category=%s cause=%s details=%s",
+        invocation.request_id,
+        operation,
+        error.code,
+        error.category,
+        cause_type,
+        details,
+        extra={
+            "portal_event": "public_tool_failure",
+            "portal_request_id": invocation.request_id,
+            "portal_tool_name": invocation.tool_name,
+            "portal_operation": operation,
+            "portal_error_code": error.code,
+            "portal_error_category": error.category,
+            "portal_error_cause_type": cause_type,
+            "portal_error_details": details,
+        },
+    )
 
 
 @register_namespace(
@@ -289,8 +413,26 @@ def create_provider(context: NamespaceContext) -> NamespaceProvider:
             The query and rendered search-result snippets with their sources.
         """
         context.logger.debug("Public DuckDuckGo search requested")
-        results = await _create_search_tool().ainvoke(query)
-        return DuckDuckGoSearchResult(query=query, results=results)
+        try:
+            results = await _create_search_tool().ainvoke(query)
+            return DuckDuckGoSearchResult(query=query, results=results)
+        except PortalError as error:
+            _log_public_tool_error(context, "duckduckgo_search", error)
+            raise
+        except Exception as exc:
+            error = UpstreamPortalError(
+                "DuckDuckGo search could not be completed.",
+                namespace=context.name,
+                details={
+                    "error_type": type(exc).__name__,
+                    "failure_reason": "provider_error",
+                    "provider": "duckduckgo",
+                    "query_length": len(query),
+                },
+                cause=exc,
+            )
+            _log_public_tool_error(context, "duckduckgo_search", error)
+            raise error from exc
 
     @provider.tool(
         name="resolve_web_link",
@@ -350,19 +492,48 @@ def create_provider(context: NamespaceContext) -> NamespaceProvider:
         Returns:
             Structured cleaned page content and retrieval metadata.
         """
-        requested_url = context.outbound_url(url)
         context.logger.debug("Public web-link resolution requested")
-        page = await _fetch_web_page(requested_url, context.outbound_url)
-        html = page.body.decode(page.encoding, errors="replace")
-        title, content, truncated = _scrub_html(html, max_characters, output_format)
-        return WebLinkContentResult(
-            requested_url=requested_url,
-            resolved_url=page.url,
-            title=title,
-            content=content,
-            format=output_format,
-            content_type=page.content_type,
-            truncated=truncated,
-        )
+        requested_url: str | None = None
+        try:
+            requested_url = context.outbound_url(url)
+            page = await _fetch_web_page(requested_url, context.outbound_url)
+            html = page.body.decode(page.encoding, errors="replace")
+            title, content, truncated = _scrub_html(html, max_characters, output_format)
+            if not content:
+                raise UpstreamPortalError(
+                    "Web page contained no readable server-rendered content.",
+                    details={
+                        "content_type": page.content_type,
+                        "failure_reason": "no_readable_content",
+                        "host": httpx.URL(page.url).host,
+                    },
+                )
+            return WebLinkContentResult(
+                requested_url=requested_url,
+                resolved_url=page.url,
+                title=title,
+                content=content,
+                format=output_format,
+                content_type=page.content_type,
+                truncated=truncated,
+            )
+        except PortalError as error:
+            _log_public_tool_error(context, "resolve_web_link", error)
+            raise
+        except Exception as exc:
+            details = {
+                "error_type": type(exc).__name__,
+                "failure_reason": "content_processing_error",
+            }
+            if requested_url is not None:
+                details["host"] = httpx.URL(requested_url).host
+            error = UpstreamPortalError(
+                "Web page content could not be processed.",
+                namespace=context.name,
+                details=details,
+                cause=exc,
+            )
+            _log_public_tool_error(context, "resolve_web_link", error)
+            raise error from exc
 
     return provider
