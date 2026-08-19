@@ -38,9 +38,12 @@ accepted values, loading behavior, and production requirements.
 The health namespace exposes only non-secret configuration metadata. It never returns
 raw API keys or Azure client secrets.
 
-The `public` namespace exposes `public_duckduckgo_search`, backed by LangChain
-Community's `DuckDuckGoSearchRun`. It declares no namespace-specific scopes, so any
-identity accepted by the portal authentication provider can discover and invoke it.
+The `public` namespace exposes `public_current_date` and `public_current_timestamp` as the
+authoritative UTC source for current date and time information. It also exposes
+`public_duckduckgo_search`, backed by LangChain Community's `DuckDuckGoSearchRun`, and
+`public_resolve_web_link` for retrieving readable public web content. The namespace declares no
+namespace-specific scopes, so any identity accepted by the portal authentication provider can
+discover and invoke its tools.
 
 ## Run
 

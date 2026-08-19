@@ -87,7 +87,11 @@ def create_mcp(
     )
     server = PortalFastMCP(
         name="MCP Portal",
-        instructions="Use namespaced tools for portal capabilities.",
+        instructions=(
+            "Use namespaced tools for portal capabilities. Use public_current_date and "
+            "public_current_timestamp as the source of truth for current date and time "
+            "information."
+        ),
         auth=create_auth_provider(settings),
         lifespan=create_portal_lifespan(shared_clients),
         portal_settings=settings,

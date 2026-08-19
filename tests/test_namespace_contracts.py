@@ -99,7 +99,12 @@ async def test_disabled_namespace_is_visible_but_not_mounted() -> None:
         tool_names = {tool.name for tool in tools}
 
     assert "health_ping" not in tool_names
-    assert tool_names == {"public_duckduckgo_search"}
+    assert tool_names == {
+        "public_current_date",
+        "public_current_timestamp",
+        "public_duckduckgo_search",
+        "public_resolve_web_link",
+    }
 
 
 async def test_namespace_test_client_mounts_one_namespace() -> None:
