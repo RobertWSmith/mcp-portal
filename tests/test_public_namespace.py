@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 
 from fastmcp import Client
@@ -11,7 +12,7 @@ import pytest
 import mcp_portal.namespaces.public as public_namespace
 from mcp_portal.errors import UpstreamPortalError, ValidationPortalError
 from mcp_portal.namespaces import iter_namespaces
-from mcp_portal.server import create_mcp
+from mcp_portal.server import PortalServices, create_mcp
 from mcp_portal.testing import create_test_settings
 
 
@@ -29,6 +30,40 @@ class FailingDuckDuckGoSearch:
     async def ainvoke(self, input: str) -> str:
         """Raise a provider error without returning search content."""
         raise RuntimeError("provider unavailable")
+
+
+async def test_public_time_tools_return_authoritative_utc_values() -> None:
+    """Verify both public time tools use the shared clock and return ISO 8601 UTC values."""
+    now = datetime(2026, 8, 19, 1, 23, 45, 678901, tzinfo=timezone.utc)
+    server = create_mcp(
+        create_test_settings(),
+        services=PortalServices(clock=lambda: now),
+    )
+
+    async with Client(server) as client:
+        date_result = await client.call_tool("public_current_date", {})
+        timestamp_result = await client.call_tool("public_current_timestamp", {})
+
+    assert date_result.structured_content == {"date": "2026-08-19"}
+    assert timestamp_result.structured_content == {"timestamp": "2026-08-19T01:23:45.678901Z"}
+
+
+async def test_public_time_tools_are_registered_as_the_time_source_of_truth() -> None:
+    """Verify clients can identify both closed-world tools as authoritative time sources."""
+    server = create_mcp(create_test_settings())
+
+    async with Client(server) as client:
+        tools = {tool.name: tool for tool in await client.list_tools()}
+
+    assert "public_current_date" in server.instructions
+    assert "public_current_timestamp" in server.instructions
+    for name in ("public_current_date", "public_current_timestamp"):
+        tool = tools[name]
+        assert tool.meta["required_scopes"] == []
+        assert tool.meta["source_of_truth"] == "current_time"
+        assert tool.annotations is not None
+        assert tool.annotations.readOnlyHint is True
+        assert tool.annotations.openWorldHint is False
 
 
 async def test_public_duckduckgo_search_uses_langchain_tool(monkeypatch) -> None:

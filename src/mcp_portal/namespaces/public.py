@@ -5,6 +5,9 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import date as Date
+from datetime import datetime as DateTime
+from datetime import timezone
 from typing import Annotated, Literal
 
 import httpx
@@ -48,6 +51,30 @@ class DuckDuckGoSearchResult(BaseModel):
 
     query: str = Field(description="Search query supplied by the caller.")
     results: str = Field(description="DuckDuckGo search results with sources and snippets.")
+
+
+class CurrentDateResult(BaseModel):
+    """Authoritative current UTC calendar date returned to MCP clients.
+
+    Attributes:
+        date: Current UTC calendar date.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: Date = Field(description="Current UTC calendar date in ISO 8601 YYYY-MM-DD format.")
+
+
+class CurrentTimestampResult(BaseModel):
+    """Authoritative current UTC timestamp returned to MCP clients.
+
+    Attributes:
+        timestamp: Current timezone-aware UTC timestamp.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: DateTime = Field(description="Current UTC timestamp in ISO 8601 format.")
 
 
 class WebLinkContentResult(BaseModel):
@@ -358,13 +385,85 @@ def _log_public_tool_error(context: NamespaceContext, operation: str, error: Por
     )
 
 
+def _register_time_tools(provider: NamespaceProvider, context: NamespaceContext) -> None:
+    """Register authoritative UTC date and timestamp tools.
+
+    Args:
+        provider: Public namespace provider receiving the tools.
+        context: Runtime services providing the shared UTC clock.
+    """
+
+    @provider.tool(
+        name="current_date",
+        title="Current Date",
+        description=(
+            "Return the current UTC calendar date. Use this tool as the authoritative source "
+            "for the current date instead of relying on client or model knowledge.\n\n"
+            "Returns:\n"
+            "    The current UTC date in ISO 8601 YYYY-MM-DD format.\n"
+        ),
+        annotations=ToolAnnotations(
+            title="Current Date",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        meta={
+            "tags": ["public", "time", "date", "authoritative", "readonly"],
+            "source_of_truth": "current_time",
+        },
+        structured_output=True,
+    )
+    async def current_date() -> CurrentDateResult:
+        """Return the authoritative current UTC calendar date.
+
+        Returns:
+            The current UTC date.
+        """
+        now = context.now().astimezone(timezone.utc)
+        return CurrentDateResult(date=now.date())
+
+    @provider.tool(
+        name="current_timestamp",
+        title="Current Timestamp",
+        description=(
+            "Return the current timezone-aware UTC timestamp. Use this tool as the "
+            "authoritative source for current date and time information instead of relying on "
+            "client or model knowledge.\n\n"
+            "Returns:\n"
+            "    The current UTC timestamp in ISO 8601 format.\n"
+        ),
+        annotations=ToolAnnotations(
+            title="Current Timestamp",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        meta={
+            "tags": ["public", "time", "timestamp", "authoritative", "readonly"],
+            "source_of_truth": "current_time",
+        },
+        structured_output=True,
+    )
+    async def current_timestamp() -> CurrentTimestampResult:
+        """Return the authoritative current UTC timestamp.
+
+        Returns:
+            The current timezone-aware UTC timestamp.
+        """
+        now = context.now().astimezone(timezone.utc)
+        return CurrentTimestampResult(timestamp=now)
+
+
 @register_namespace(
     NamespaceMetadata(
         name="public",
         description="Generally available tools for every authenticated portal user.",
-        tags=frozenset({"public", "search", "web", "readonly"}),
+        tags=frozenset({"public", "search", "time", "web", "readonly"}),
         owner="platform-engineering",
-        version="1.1.0",
+        version="1.2.0",
         maturity="stable",
         data_classification="public",
         required_scopes=frozenset(),
@@ -381,6 +480,7 @@ def create_provider(context: NamespaceContext) -> NamespaceProvider:
         Public tools available without namespace-specific scopes.
     """
     provider = NamespaceProvider("Public")
+    _register_time_tools(provider, context)
 
     @provider.tool(
         name="duckduckgo_search",
