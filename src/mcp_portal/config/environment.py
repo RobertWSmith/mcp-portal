@@ -29,6 +29,7 @@ from mcp_portal.config.models import (
     NamespaceDiscoverySettings,
     ObservabilitySettings,
     OpenAISettings,
+    WikiSettings,
 )
 
 
@@ -333,6 +334,27 @@ def _mongodb_settings_from_env() -> MongoDBSettings:
         vector_search_index=(
             _optional_env(EnvironmentVariable.MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX)
             or DEFAULT_MONGODB_VECTOR_INDEX
+        ),
+    )
+
+
+def _wiki_settings_from_env() -> WikiSettings:
+    """Build persistent wiki settings from environment variables.
+
+    Returns:
+        PostgreSQL/pgvector wiki settings.
+    """
+    return WikiSettings(
+        sqlalchemy_url=_optional_env(EnvironmentVariable.MCP_PORTAL_WIKI_DATABASE_URL),
+        schema=os.getenv(EnvironmentVariable.MCP_PORTAL_WIKI_SCHEMA, "mcp_portal_wiki"),
+        embedding_dimensions=_int_env(
+            EnvironmentVariable.MCP_PORTAL_WIKI_EMBEDDING_DIMENSIONS, default=3072
+        ),
+        search_candidates=_int_env(
+            EnvironmentVariable.MCP_PORTAL_WIKI_SEARCH_CANDIDATES, default=50
+        ),
+        auto_initialize=_bool_env(
+            EnvironmentVariable.MCP_PORTAL_WIKI_AUTO_INITIALIZE, default=False
         ),
     )
 

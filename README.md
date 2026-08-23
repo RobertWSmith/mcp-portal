@@ -30,6 +30,7 @@ accepted values, loading behavior, and production requirements.
 - `MCP_PORTAL_HTTP_PATH` and `MCP_PORTAL_HEALTH_PATH`
 - `MCP_PORTAL_DATABASE_PROVIDER`, `MCP_PORTAL_DATABASE_SQLALCHEMY_URL`, and `MCP_PORTAL_ORACLE_*`
 - `MCP_PORTAL_MONGODB_*` for LangChain MongoDB connectors
+- `MCP_PORTAL_WIKI_*` for the persistent PostgreSQL/pgvector wiki
 - `MCP_PORTAL_EGRESS_ALLOWED_HOSTS`, `MCP_PORTAL_EGRESS_DESTINATION_CLASSIFICATIONS`, and
   `MCP_PORTAL_EGRESS_SENSITIVE_FIELD_ACTION` for data-aware outbound policy
 - `MCP_PORTAL_EXECUTION_REMOTE_CLASSIFICATIONS` for classifications requiring remote cells
@@ -44,6 +45,11 @@ authoritative UTC source for current date and time information. It also exposes
 `public_resolve_web_link` for retrieving readable public web content. The namespace declares no
 namespace-specific scopes, so any identity accepted by the portal authentication provider can
 discover and invoke its tools.
+
+The optional `wiki` namespace exposes persistent, cited knowledge through `wiki_search`,
+`wiki_get_page`, `wiki_list_pages`, page/provenance resources, and an evidence-first research
+prompt. It mounts only when `MCP_PORTAL_WIKI_DATABASE_URL` is configured and requires the
+`wiki.read` scope when authentication is enabled.
 
 ## Run
 
@@ -235,6 +241,29 @@ tool. Change `policy_version` whenever authorization rules or source-data semant
 configure the Atlas Vector Search index so `_portal_tenant` and `_portal_authorization` are
 filter fields. Missing filter-index support causes lookups to fail instead of falling back to an
 unfiltered search.
+
+## Persistent Wiki
+
+Install the wiki extra and configure a dedicated PostgreSQL database with pgvector:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[wiki]"
+```
+
+```dotenv
+MCP_PORTAL_WIKI_DATABASE_URL=postgresql+psycopg://wiki:change-me@localhost:5432/wiki
+MCP_PORTAL_WIKI_SCHEMA=mcp_portal_wiki
+MCP_PORTAL_WIKI_EMBEDDING_DIMENSIONS=3072
+MCP_PORTAL_WIKI_SEARCH_CANDIDATES=50
+MCP_PORTAL_WIKI_AUTO_INITIALIZE=false
+```
+
+Run `docs/sql/wiki-pgvector.sql` with a migration owner before production startup. The runtime
+role should receive only schema usage and required DML permissions. `AUTO_INITIALIZE=true` is a
+local-development convenience and should remain disabled in production. PostgreSQL full-text
+search is always available; pgvector similarity is added when a deployment registers a
+`wiki_embeddings` client. See `docs/wiki-implementation.md` for the ingestion, drafting, review,
+migration, and operations plan.
 
 FastMCP emits spans and MCP Portal emits tool, admission, downstream, usage, and estimated-cost
 metrics when an OpenTelemetry SDK is attached. Set `OTEL_SERVICE_NAME` and

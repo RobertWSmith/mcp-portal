@@ -31,6 +31,16 @@ def clean_portal_environment():
             os.environ[name] = value
 
 
+def _assert_production_wiki_settings(settings: Settings) -> None:
+    """Verify persistent wiki environment values loaded into runtime settings."""
+    assert settings.wiki.configured is True
+    assert settings.wiki.postgresql_configured is True
+    assert settings.wiki.schema == "knowledge"
+    assert settings.wiki.embedding_dimensions == 1536
+    assert settings.wiki.search_candidates == 80
+    assert settings.wiki.auto_initialize is True
+
+
 def test_environment_documentation_matches_settings() -> None:
     """Verify environment examples and reference docs cover the implemented settings."""
     project_root = Path(__file__).resolve().parents[2]
@@ -152,6 +162,14 @@ def test_settings_from_explicit_env_file(tmp_path: Path, monkeypatch) -> None:
         "vector_search_configured": False,
         "vector_search_index": "vector_index",
     }
+    assert snapshot["wiki"] == {
+        "configured": False,
+        "postgresql_configured": False,
+        "schema": "mcp_portal_wiki",
+        "embedding_dimensions": 3072,
+        "search_candidates": 50,
+        "auto_initialize": False,
+    }
 
 
 def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
@@ -192,6 +210,11 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
                 "MCP_PORTAL_MONGODB_CONNECTION_STRING=mongodb+srv://user:secret@cluster.example/test",
                 "MCP_PORTAL_MONGODB_DATABASE=portal",
                 "MCP_PORTAL_MONGODB_VECTOR_SEARCH_INDEX=portal_vector",
+                "MCP_PORTAL_WIKI_DATABASE_URL=postgresql+psycopg://wiki:secret@db.example/wiki",
+                "MCP_PORTAL_WIKI_SCHEMA=knowledge",
+                "MCP_PORTAL_WIKI_EMBEDDING_DIMENSIONS=1536",
+                "MCP_PORTAL_WIKI_SEARCH_CANDIDATES=80",
+                "MCP_PORTAL_WIKI_AUTO_INITIALIZE=true",
                 "OTEL_SERVICE_NAME=portal-prod",
                 "OTEL_EXPORTER_OTLP_ENDPOINT=http://otel.example:4317",
                 "MCP_PORTAL_METRICS_ENABLED=true",
@@ -261,6 +284,7 @@ def test_settings_load_production_options(tmp_path: Path, monkeypatch) -> None:
     assert settings.mongodb.namespace() == "portal.documents"
     assert settings.mongodb.vector_search_index == "portal_vector"
     assert settings.mongodb.vector_search_configured is True
+    _assert_production_wiki_settings(settings)
     assert settings.observability.enabled is True
     assert settings.observability.service_name == "portal-prod"
     assert settings.observability.metrics_enabled is True

@@ -307,6 +307,33 @@ Semantic caches require an authenticated subject or workload. Atlas Vector Searc
 the semantic-cache collection must declare `_portal_tenant` and `_portal_authorization` as filter
 fields so the portal can enforce its mandatory backend pre-filter.
 
+## Persistent Wiki Settings
+
+The `wiki` namespace uses a dedicated PostgreSQL database so its revision history, citations,
+full-text index, and pgvector embeddings survive portal restarts. It is mounted only when
+`MCP_PORTAL_WIKI_DATABASE_URL` is configured. Install the `.[wiki]` extra and enable the
+`vector` extension in the target database.
+
+| Variable | Default | Required | Description |
+| --- | --- | --- | --- |
+| `MCP_PORTAL_WIKI_DATABASE_URL` | unset | Required to mount `wiki` | Dedicated PostgreSQL SQLAlchemy URL, normally using the `postgresql+psycopg` dialect. It is redacted from diagnostics. |
+| `MCP_PORTAL_WIKI_SCHEMA` | `mcp_portal_wiki` | No | PostgreSQL schema containing wiki page pointers, immutable revisions, passages, and indexes. |
+| `MCP_PORTAL_WIKI_EMBEDDING_DIMENSIONS` | `3072` | No | Dimensions in the pgvector `halfvec` column. Must match the deployment-provided `wiki_embeddings` client. |
+| `MCP_PORTAL_WIKI_SEARCH_CANDIDATES` | `50` | No | Candidates selected independently by PostgreSQL full-text and vector retrieval before reciprocal-rank fusion. |
+| `MCP_PORTAL_WIKI_AUTO_INITIALIZE` | `false` | No | Development convenience that creates the extension, schema, tables, and indexes on first repository use. Keep false in production and run the reviewed migration. |
+
+```dotenv
+MCP_PORTAL_WIKI_DATABASE_URL=postgresql+psycopg://wiki:change-me@localhost:5432/wiki
+MCP_PORTAL_WIKI_SCHEMA=mcp_portal_wiki
+MCP_PORTAL_WIKI_EMBEDDING_DIMENSIONS=3072
+MCP_PORTAL_WIKI_SEARCH_CANDIDATES=50
+MCP_PORTAL_WIKI_AUTO_INITIALIZE=false
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[wiki]"
+```
+
 ## Enterprise Control Plane Settings
 
 | Variable | Default | Required | Description |

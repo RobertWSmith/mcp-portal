@@ -32,6 +32,10 @@ oracle = [
 mongodb = [
     "langchain-mongodb>=0.11,<1",
 ]
+wiki = [
+    "pgvector>=0.4,<1",
+    "psycopg[binary]>=3.2,<4",
+]
 ldap = [
     "ldap3>=2.9.1,<3",
 ]
