@@ -155,8 +155,8 @@ rejected by default because the verified invocation claim is authoritative.
 Enterprise deployments can instead use `MCP_PORTAL_AUTH_PROVIDER=ldap`, `kerberos`, or
 `ldap+kerberos`. LDAP accepts HTTP Basic credentials and requires HTTPS plus an encrypted
 LDAPS/StartTLS directory connection. Kerberos accepts HTTP Negotiate tickets for a configured
-service principal. Install `.[ldap]`, `.[kerberos]`, or `.[enterprise-auth]` before enabling
-those providers; the full settings and examples are in
+service principal. LDAP support ships with the base installation; install `.[kerberos]` before
+enabling Kerberos or combined LDAP/Kerberos authentication. The full settings and examples are in
 [docs/environment-variables.md](docs/environment-variables.md).
 
 Tag metadata can be attached to SDK tools through `_meta`. Keep using `readonly`,
@@ -182,7 +182,7 @@ additional portal extra.
 Install the Oracle extra when using the preferred Oracle backend:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[oracle]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
 Configure `MCP_PORTAL_DATABASE_PROVIDER=oracle` plus `MCP_PORTAL_ORACLE_DSN`,
@@ -247,7 +247,7 @@ unfiltered search.
 Install the wiki extra and configure a dedicated PostgreSQL database with pgvector:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[wiki]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
 ```dotenv
