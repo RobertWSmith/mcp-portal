@@ -149,6 +149,7 @@ def create_namespace_test_context(
                     selected_settings.auth.jwt_public_key,
                     selected_settings.auth.ldap_bind_password,
                     selected_settings.mongodb.connection_string,
+                    selected_settings.wiki.sqlalchemy_url,
                 )
             ),
             clock=dependencies.clock,

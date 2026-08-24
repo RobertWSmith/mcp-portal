@@ -64,8 +64,67 @@ def default_client_factories(
             shared=True,
             readiness_check=mongodb_ready,
         )
+    if settings is not None and settings.wiki.configured:
+        factories = factories.with_factory(
+            "wiki_database",
+            lambda: _create_wiki_engine(settings),
+            shared=True,
+        )
+
+        def wiki_ready() -> None:
+            """Verify that the pgvector wiki schema has been initialized."""
+            factories.shared("wiki_repository").ping()
+
+        factories = factories.with_factory(
+            "wiki_repository",
+            lambda: _create_pgvector_wiki_repository(factories.shared("wiki_database"), settings),
+            shared=True,
+            readiness_check=wiki_ready,
+        )
 
     return factories
+
+
+def _create_wiki_engine(settings: Settings) -> Any:
+    """Create the dedicated persistent PostgreSQL wiki engine.
+
+    Args:
+        settings: Runtime settings containing the dedicated wiki database URL.
+
+    Returns:
+        A lifecycle-managed SQLAlchemy engine.
+    """
+    if not settings.wiki.postgresql_configured or settings.wiki.sqlalchemy_url is None:
+        raise ConfigurationPortalError(
+            "Wiki persistence requires a PostgreSQL SQLAlchemy URL.",
+            details={"client": "wiki_database", "postgresql_configured": False},
+        )
+    try:
+        return _import_sqlalchemy_create_engine()(
+            settings.wiki.sqlalchemy_url,
+            pool_pre_ping=True,
+        )
+    except Exception as error:
+        raise ConfigurationPortalError(
+            "Persistent wiki database engine could not be created.",
+            details={"client": "wiki_database", "backend": "postgresql_pgvector"},
+            cause=error,
+        ) from error
+
+
+def _create_pgvector_wiki_repository(engine: Any, settings: Settings) -> Any:
+    """Construct the durable repository without optional imports at startup.
+
+    Args:
+        engine: Dedicated SQLAlchemy engine for persistent wiki storage.
+        settings: Runtime settings containing wiki schema and vector dimensions.
+
+    Returns:
+        A PostgreSQL and pgvector-backed wiki repository.
+    """
+    from mcp_portal.wiki.pgvector import PgVectorWikiRepository
+
+    return PgVectorWikiRepository(engine, settings.wiki)
 
 
 def _create_sqlalchemy_engine(settings: Settings) -> Any:

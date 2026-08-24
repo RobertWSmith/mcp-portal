@@ -30,6 +30,7 @@ accepted values, loading behavior, and production requirements.
 - `MCP_PORTAL_HTTP_PATH` and `MCP_PORTAL_HEALTH_PATH`
 - `MCP_PORTAL_DATABASE_PROVIDER`, `MCP_PORTAL_DATABASE_SQLALCHEMY_URL`, and `MCP_PORTAL_ORACLE_*`
 - `MCP_PORTAL_MONGODB_*` for LangChain MongoDB connectors
+- `MCP_PORTAL_WIKI_*` for the persistent PostgreSQL/pgvector wiki
 - `MCP_PORTAL_EGRESS_ALLOWED_HOSTS`, `MCP_PORTAL_EGRESS_DESTINATION_CLASSIFICATIONS`, and
   `MCP_PORTAL_EGRESS_SENSITIVE_FIELD_ACTION` for data-aware outbound policy
 - `MCP_PORTAL_EXECUTION_REMOTE_CLASSIFICATIONS` for classifications requiring remote cells
@@ -44,6 +45,11 @@ authoritative UTC source for current date and time information. It also exposes
 `public_resolve_web_link` for retrieving readable public web content. The namespace declares no
 namespace-specific scopes, so any identity accepted by the portal authentication provider can
 discover and invoke its tools.
+
+The optional `wiki` namespace exposes persistent, cited knowledge through `wiki_search`,
+`wiki_get_page`, `wiki_list_pages`, page/provenance resources, and an evidence-first research
+prompt. It mounts only when `MCP_PORTAL_WIKI_DATABASE_URL` is configured and requires the
+`wiki.read` scope when authentication is enabled.
 
 ## Run
 
@@ -149,8 +155,8 @@ rejected by default because the verified invocation claim is authoritative.
 Enterprise deployments can instead use `MCP_PORTAL_AUTH_PROVIDER=ldap`, `kerberos`, or
 `ldap+kerberos`. LDAP accepts HTTP Basic credentials and requires HTTPS plus an encrypted
 LDAPS/StartTLS directory connection. Kerberos accepts HTTP Negotiate tickets for a configured
-service principal. Install `.[ldap]`, `.[kerberos]`, or `.[enterprise-auth]` before enabling
-those providers; the full settings and examples are in
+service principal. LDAP support ships with the base installation; install `.[kerberos]` before
+enabling Kerberos or combined LDAP/Kerberos authentication. The full settings and examples are in
 [docs/environment-variables.md](docs/environment-variables.md).
 
 Tag metadata can be attached to SDK tools through `_meta`. Keep using `readonly`,
@@ -176,7 +182,7 @@ additional portal extra.
 Install the Oracle extra when using the preferred Oracle backend:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[oracle]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
 Configure `MCP_PORTAL_DATABASE_PROVIDER=oracle` plus `MCP_PORTAL_ORACLE_DSN`,
@@ -235,6 +241,57 @@ tool. Change `policy_version` whenever authorization rules or source-data semant
 configure the Atlas Vector Search index so `_portal_tenant` and `_portal_authorization` are
 filter fields. Missing filter-index support causes lookups to fail instead of falling back to an
 unfiltered search.
+
+## Persistent Wiki
+
+Install the project dependencies and configure a dedicated PostgreSQL database with pgvector:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+```dotenv
+MCP_PORTAL_WIKI_DATABASE_URL=postgresql+psycopg://wiki:change-me@localhost:5432/wiki
+MCP_PORTAL_WIKI_SCHEMA=mcp_portal_wiki
+MCP_PORTAL_WIKI_EMBEDDING_DIMENSIONS=3072
+MCP_PORTAL_WIKI_SEARCH_CANDIDATES=50
+MCP_PORTAL_WIKI_AUTO_INITIALIZE=false
+```
+
+Run `docs/sql/wiki-pgvector.sql` with a migration owner before production startup. The runtime
+role should receive only schema usage and required DML permissions. `AUTO_INITIALIZE=true` is a
+local-development convenience and should remain disabled in production. PostgreSQL full-text
+search is always available; pgvector similarity is added when a deployment registers a
+`wiki_embeddings` client. See `docs/wiki-implementation.md` for the ingestion, drafting, review,
+migration, and operations plan.
+
+Upload one trusted local document with the operator-only CLI. Start with a dry run, then repeat with
+the explicit publish flag:
+
+```powershell
+.\.venv\Scripts\mcp-portal-wiki.exe ingest .\knowledge\production-runbook.pdf `
+  --tenant-id acme `
+  --source-id operations-production-runbook `
+  --source-uri https://docs.example.com/runbooks/production `
+  --tag operations `
+  --required-scope operations.read `
+  --dry-run
+
+.\.venv\Scripts\mcp-portal-wiki.exe ingest .\knowledge\production-runbook.pdf `
+  --tenant-id acme `
+  --source-id operations-production-runbook `
+  --source-uri https://docs.example.com/runbooks/production `
+  --tag operations `
+  --required-scope operations.read `
+  --publish
+```
+
+Use `--single-tenant` instead of `--tenant-id` for a single-tenant portal. Supported local formats
+are Markdown, UTF-8 text, HTML, PDF, and DOCX. Local paths are never exposed in stored citations:
+when `--source-uri` is omitted, the command generates a non-reversible URN. Reusing the same
+`--source-id` creates an immutable page revision and atomically replaces the previous passage set,
+so moved files should retain their original logical source ID. Dry runs parse locally and do not
+require a database connection; publishing requires the configured PostgreSQL wiki schema.
 
 FastMCP emits spans and MCP Portal emits tool, admission, downstream, usage, and estimated-cost
 metrics when an OpenTelemetry SDK is attached. Set `OTEL_SERVICE_NAME` and

@@ -26,6 +26,7 @@ from mcp_portal.config.environment import (
     _observability_settings_from_env,
     _openai_settings_from_env,
     _resolve_env_file,
+    _wiki_settings_from_env,
 )
 from mcp_portal.config.models import (
     AuthSettings,
@@ -41,6 +42,7 @@ from mcp_portal.config.models import (
     NamespaceDiscoverySettings,
     ObservabilitySettings,
     OpenAISettings,
+    WikiSettings,
 )
 
 
@@ -87,6 +89,7 @@ class Settings:
         observability: Observability export metadata.
         database: Preferred database backend settings.
         mongodb: MongoDB connector settings.
+        wiki: Persistent PostgreSQL/pgvector wiki settings.
     """
 
     openai: Annotated[OpenAISettings, "Settings for direct OpenAI platform calls."]
@@ -129,6 +132,9 @@ class Settings:
     mongodb: Annotated[MongoDBSettings, "MongoDB connector settings."] = field(
         default_factory=MongoDBSettings
     )
+    wiki: Annotated[WikiSettings, "Persistent PostgreSQL/pgvector wiki settings."] = field(
+        default_factory=WikiSettings
+    )
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None, override: bool = False) -> "Settings":
@@ -163,6 +169,7 @@ class Settings:
             observability=_observability_settings_from_env(),
             database=_database_settings_from_env(),
             mongodb=_mongodb_settings_from_env(),
+            wiki=_wiki_settings_from_env(),
         )
 
     @property
@@ -275,6 +282,8 @@ class Settings:
         """
         if name == "health":
             return self.health.enabled
+        if name == "wiki":
+            return self.wiki.configured
         return True
 
     def validate_production(self) -> None:
@@ -404,6 +413,8 @@ class Settings:
             for classification in self.enterprise.execution_remote_classifications
         ):
             problems.append("execution-cell remote classifications must be supported")
+        if self.wiki.configured and not self.wiki.postgresql_configured:
+            problems.append("wiki persistence requires a PostgreSQL SQLAlchemy URL")
 
         return problems
 
@@ -437,4 +448,5 @@ class Settings:
             "observability": self.observability.public_snapshot(),
             "database": self.database.public_snapshot(),
             "mongodb": self.mongodb.public_snapshot(),
+            "wiki": self.wiki.public_snapshot(),
         }

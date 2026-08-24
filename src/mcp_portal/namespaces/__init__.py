@@ -49,6 +49,7 @@ _DATA_CLASSIFICATIONS = frozenset({"public", "internal", "confidential", "restri
 BUILTIN_NAMESPACE_MODULES = (
     "mcp_portal.namespaces.health",
     "mcp_portal.namespaces.public",
+    "mcp_portal.namespaces.wiki",
 )
 NAMESPACE_ENTRY_POINT_GROUP = "mcp_portal.namespaces"
 
@@ -116,6 +117,22 @@ class NamespaceContext:
         require_execution_cell(invocation, namespace=self.name)
         return invocation
 
+    def resource_invocation(self) -> InvocationContext:
+        """Return trusted identity for an active resource-template read.
+
+        Resource reads are not model-controlled actions and therefore do not receive an
+        execution cell. The invocation middleware still binds verified identity and the owning
+        namespace so tenant-aware repositories can filter before reading content.
+
+        Returns:
+            Verified request identity bound to this resource namespace.
+        """
+        invocation = current_invocation()
+        expected = f"resource:{self.name}:"
+        if invocation is None or not invocation.tool_name.startswith(expected):
+            raise RuntimeError("Resource invocation context is unavailable")
+        return invocation
+
     def execution_cell(self) -> ExecutionCell:
         """Return the active single-use cell bound to this namespace.
 
@@ -135,6 +152,16 @@ class NamespaceContext:
         """
         return TenantScope.from_invocation(
             self.invocation(), require_tenant=self.settings.enterprise.require_tenant
+        )
+
+    def resource_tenant_scope(self) -> TenantScope:
+        """Return a tenant partition derived from a verified resource request.
+
+        Returns:
+            Tenant partition helper derived only from verified identity.
+        """
+        return TenantScope.from_invocation(
+            self.resource_invocation(), require_tenant=self.settings.enterprise.require_tenant
         )
 
     def tenant_tasks(self) -> TenantTaskService:
@@ -802,6 +829,7 @@ def build_namespace_runtimes(
             settings.database.sqlalchemy_url,
             settings.database.oracle_password,
             settings.mongodb.connection_string,
+            settings.wiki.sqlalchemy_url,
         )
     )
     shared_audit = dependencies.audit_sink or LoggingAuditSink()

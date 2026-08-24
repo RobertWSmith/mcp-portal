@@ -742,6 +742,81 @@ class DatabaseSettings:
 
 
 @dataclass(frozen=True)
+class WikiSettings:
+    """Persistent PostgreSQL/pgvector settings for the wiki namespace.
+
+    Attributes:
+        sqlalchemy_url: Dedicated PostgreSQL SQLAlchemy URL for persistent wiki state.
+        schema: PostgreSQL schema containing wiki tables and indexes.
+        embedding_dimensions: Dimensions stored in each pgvector half-precision embedding.
+        search_candidates: Candidates selected by each side of hybrid retrieval.
+        auto_initialize: Whether development startup may create the pgvector extension and wiki schema.
+    """
+
+    sqlalchemy_url: Annotated[
+        str | None, "Dedicated PostgreSQL SQLAlchemy URL for persistent wiki state."
+    ] = None
+    schema: Annotated[str, "PostgreSQL schema containing wiki tables and indexes."] = (
+        "mcp_portal_wiki"
+    )
+    embedding_dimensions: Annotated[
+        int, "Dimensions stored in each pgvector half-precision embedding."
+    ] = 3072
+    search_candidates: Annotated[int, "Candidates selected by each side of hybrid retrieval."] = 50
+    auto_initialize: Annotated[
+        bool, "Whether development startup may create the pgvector extension and wiki schema."
+    ] = False
+
+    def __post_init__(self) -> None:
+        """Reject unsafe identifiers and invalid retrieval limits."""
+        if (
+            not self.schema
+            or self.schema[0].isdigit()
+            or not self.schema.replace("_", "").isalnum()
+        ):
+            raise ValueError("Wiki schema must be a PostgreSQL identifier")
+        if not 1 <= self.embedding_dimensions <= 4_000:
+            raise ValueError("Wiki embedding dimensions must be between 1 and 4000")
+        if not 10 <= self.search_candidates <= 1_000:
+            raise ValueError("Wiki search candidates must be between 10 and 1000")
+
+    @property
+    def configured(self) -> bool:
+        """Report whether a dedicated wiki database URL is configured.
+
+        Returns:
+            True when a non-empty database URL was supplied.
+        """
+        return self.sqlalchemy_url is not None
+
+    @property
+    def postgresql_configured(self) -> bool:
+        """Report whether the configured URL selects PostgreSQL.
+
+        Returns:
+            True when the configured SQLAlchemy dialect is PostgreSQL.
+        """
+        return bool(
+            self.sqlalchemy_url and self.sqlalchemy_url.partition(":")[0].startswith("postgresql")
+        )
+
+    def public_snapshot(self) -> dict[str, object]:
+        """Return non-secret wiki persistence metadata.
+
+        Returns:
+            Public runtime configuration without database credentials.
+        """
+        return {
+            "configured": self.configured,
+            "postgresql_configured": self.postgresql_configured,
+            "schema": self.schema,
+            "embedding_dimensions": self.embedding_dimensions,
+            "search_candidates": self.search_candidates,
+            "auto_initialize": self.auto_initialize,
+        }
+
+
+@dataclass(frozen=True)
 class MongoDBSettings:
     """MongoDB connector settings for namespace integrations.
 

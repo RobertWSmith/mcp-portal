@@ -44,6 +44,7 @@ from mcp_portal.config.models import (
     NamespaceDiscoverySettings,
     ObservabilitySettings,
     OpenAISettings,
+    WikiSettings,
 )
 from mcp_portal.config.settings import Settings
 

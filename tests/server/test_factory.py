@@ -85,6 +85,7 @@ async def test_health_tools_publish_standard_mcp_semantics(client: Client) -> No
         "namespace_discovery",
         "observability",
         "openai",
+        "wiki",
     }
 
 

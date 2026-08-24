@@ -9,7 +9,7 @@ from typing import Sequence
 
 import anyio
 
-from mcp_portal.config import OpenAISettings, Settings
+from mcp_portal.config import OpenAISettings, Settings, WikiSettings
 from mcp_portal.contracts import compare_tool_contract_manifests, generate_tool_contract_manifest
 from mcp_portal.namespaces import iter_namespaces, validate_namespaces
 from mcp_portal.server import create_mcp
@@ -29,7 +29,8 @@ def governance_settings() -> Settings:
             large_language_model="gpt-5.5",
             small_language_model="gpt-5.5-mini",
             embedding_model="text-embedding-3-large",
-        )
+        ),
+        wiki=WikiSettings(sqlalchemy_url="postgresql+psycopg://wiki.invalid/wiki"),
     )
 
 

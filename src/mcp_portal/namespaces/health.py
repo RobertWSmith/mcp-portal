@@ -49,6 +49,7 @@ class RuntimeConfigResult(BaseModel):
         observability: Telemetry export configuration.
         database: Relational database configuration metadata.
         mongodb: MongoDB connector configuration metadata.
+        wiki: Persistent wiki configuration metadata.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -69,6 +70,7 @@ class RuntimeConfigResult(BaseModel):
     observability: dict[str, Any] = Field(description="Telemetry export configuration.")
     database: dict[str, Any] = Field(description="Relational database configuration metadata.")
     mongodb: dict[str, Any] = Field(description="MongoDB connector configuration metadata.")
+    wiki: dict[str, Any] = Field(description="Persistent wiki configuration metadata.")
 
 
 def health_status(context: NamespaceContext) -> NamespaceStatus:

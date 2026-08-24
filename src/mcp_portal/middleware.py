@@ -122,6 +122,36 @@ class InvocationContextMiddleware(Middleware):
         finally:
             _current_tool_call.reset(state_token)
 
+    async def on_read_resource(self, context: MiddlewareContext[Any], call_next: CallNext) -> Any:
+        """Expose verified identity to tenant-aware resource-template readers.
+
+        Resource reads do not open execution cells because they are application-controlled
+        context rather than model-controlled actions. They still require request-bound identity
+        so repositories can enforce tenant and document ACL predicates.
+
+        Args:
+            context: MCP resource-read request and its URI.
+            call_next: Next middleware or resource handler in the chain.
+
+        Returns:
+            Resource content returned by the downstream handler.
+        """
+        uri = str(context.message.uri)
+        namespace = await self.server.resource_namespace(uri)
+        namespace_name = namespace.name if namespace is not None else "__development__"
+        timeout = (
+            namespace.timeout_seconds
+            if namespace is not None and namespace.timeout_seconds is not None
+            else self.server.portal_settings.enterprise.tool_timeout_seconds
+        )
+        invocation = new_invocation(
+            f"resource:{namespace_name}:{uri}",
+            self.server.portal_settings.enterprise.tenant_claim,
+            timeout,
+        )
+        with invocation_scope(invocation):
+            return await call_next(context)
+
 
 class AuthorizationMiddleware(Middleware):
     """Authorize tool calls and emit sanitized decision audit records."""

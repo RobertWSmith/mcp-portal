@@ -175,6 +175,7 @@ def _resolve_portal_services(
             settings.database.sqlalchemy_url,
             settings.database.oracle_password,
             settings.mongodb.connection_string,
+            settings.wiki.sqlalchemy_url,
         )
     )
     return replace(
