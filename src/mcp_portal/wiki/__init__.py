@@ -5,6 +5,7 @@
 from mcp_portal.wiki.models import (
     WikiAccess,
     WikiCitation,
+    WikiIngestionResult,
     WikiPage,
     WikiPageListResult,
     WikiPageRecord,
@@ -14,6 +15,7 @@ from mcp_portal.wiki.models import (
     WikiProvenance,
     WikiSearchHit,
     WikiSearchResult,
+    WikiSourceRecord,
 )
 
 __all__ = [name for name in globals() if not name.startswith("__")]

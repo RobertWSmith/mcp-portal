@@ -21,11 +21,12 @@ changes another namespace's database contract.
 5. Every generated factual claim must cite a stored `citation_id` and `source_revision`.
 6. Source content is untrusted data. Instructions found inside a source are never control input.
 7. Missing and unauthorized pages produce the same public not-found result.
-8. Publishing and archiving are separate destructive/write tools protected by approval receipts.
+8. Future model-callable publishing and archiving are separate destructive/write tools protected by
+   approval receipts; trusted local operators publish through a separate CLI boundary.
 9. Embedding dimensions are a schema contract; a mismatch fails instead of truncating vectors.
 10. LLM model, prompt, embedding, and source revisions are retained in future generation records.
 
-## Current Phase: Durable Read-Only Retrieval
+## Current Phase: Durable Retrieval and Trusted Local Ingestion
 
 Implemented components:
 
@@ -40,24 +41,31 @@ Implemented components:
 - Request identity propagation for tenant-aware resource reads without granting resource handlers an
   execution cell.
 - Lifecycle-managed `wiki_database` and `wiki_repository` clients with readiness checks.
+- Operator-only `mcp-portal-wiki ingest` command with explicit tenant selection and an explicit
+  `--publish` or `--dry-run` decision.
+- Markdown, UTF-8 text, HTML, PDF, and DOCX parsing with deterministic heading-aware chunking.
+- Durable current-source records containing source revision, content hash, source URI, file format,
+  update time, ingestion time, tags, scopes, and the associated immutable page revision.
+- One-transaction source ingestion that writes the revision and publication pointer, replaces the
+  complete passage set for the logical source, and advances current-source metadata.
+- Non-reversible default source IDs and citation URNs so local operator paths are not disclosed to
+  MCP clients.
 
 Remaining work in this phase:
 
 - Run the PostgreSQL migration in a test container and add an opt-in integration test.
-- Add a command-line ingestion utility that accepts a trusted tenant and source manifest outside the
-  model-controlled MCP tool surface.
 - Add embedding client adapters for direct OpenAI and Azure OpenAI through the client registry.
-- Add checksum-based passage upserts and deletion of passages removed by a newer source revision.
+- Add an unchanged-checksum short circuit and changed-chunk-only embedding updates.
 - Add backup/restore and retention tests for page revisions.
 
 ## Phase 2: Source Ingestion and Freshness
 
-Add connector-neutral interfaces:
+Extend local ingestion with connector-neutral interfaces:
 
 - `WikiSourceConnector.discover()` returns authorized source identifiers and revision metadata.
 - `WikiSourceConnector.fetch()` returns bytes plus media type; it never returns credentials.
-- `WikiParser.parse()` normalizes Markdown, HTML, PDF, Office, and repository content.
-- `WikiChunker.chunk()` emits stable heading-aware passage IDs and character offsets.
+- `WikiParser.parse()` extends the existing local parsers to repository and remote content.
+- `WikiChunker.chunk()` extends deterministic heading-aware passage IDs with source offsets.
 - `WikiEmbeddingProvider.embed_documents()` returns exactly the configured dimensions.
 
 Ingestion runs through `context.downstream(...)` or a non-MCP worker with the same credential broker,

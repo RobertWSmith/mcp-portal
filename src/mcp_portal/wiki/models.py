@@ -269,6 +269,73 @@ class WikiProvenance(BaseModel):
     citations: list[WikiCitation] = Field(description="Complete evidence set for the revision.")
 
 
+class WikiIngestionResult(BaseModel):
+    """Sanitized outcome from one trusted document ingestion.
+
+    Attributes:
+        source_id: Stable logical source identifier.
+        source_revision: Content-derived source revision identifier.
+        source_uri: Canonical URI exposed by citations.
+        page_slug: Published wiki page slug.
+        page_revision_id: Immutable page revision identifier.
+        source_content_hash: SHA-256 digest of the uploaded source bytes.
+        page_content_hash: SHA-256 digest of normalized page Markdown.
+        document_format: Parser selected for the source document.
+        byte_count: Number of uploaded source bytes.
+        passage_count: Number of deterministic retrieval passages.
+        dry_run: Whether validation ran without changing persistent state.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: str = Field(
+        min_length=1,
+        max_length=512,
+        description="Stable logical source identifier.",
+    )
+    source_revision: str = Field(
+        min_length=1,
+        max_length=160,
+        description="Content-derived source revision identifier.",
+    )
+    source_uri: str = Field(
+        min_length=1,
+        max_length=2_048,
+        description="Canonical URI exposed by citations.",
+    )
+    page_slug: str = Field(
+        pattern=SLUG_PATTERN,
+        description="Published wiki page slug.",
+    )
+    page_revision_id: str = Field(
+        min_length=1,
+        max_length=160,
+        description="Immutable page revision identifier.",
+    )
+    source_content_hash: str = Field(
+        pattern=HASH_PATTERN,
+        description="SHA-256 digest of the uploaded source bytes.",
+    )
+    page_content_hash: str = Field(
+        pattern=HASH_PATTERN,
+        description="SHA-256 digest of normalized page Markdown.",
+    )
+    document_format: str = Field(
+        min_length=1,
+        max_length=40,
+        description="Parser selected for the source document.",
+    )
+    byte_count: int = Field(
+        ge=1,
+        description="Number of uploaded source bytes.",
+    )
+    passage_count: int = Field(
+        ge=1,
+        description="Number of deterministic retrieval passages.",
+    )
+    dry_run: bool = Field(description="Whether validation ran without changing persistent state.")
+
+
 @dataclass(frozen=True)
 class WikiAccess:
     """Trusted tenant and authorization context used by repository predicates.
@@ -364,6 +431,45 @@ class WikiPassageRecord:
         tuple[float, ...] | None,
         "Optional semantic vector matching configured dimensions.",
     ] = None
+
+
+@dataclass(frozen=True)
+class WikiSourceRecord:
+    """Durable metadata for the current revision of one ingested source.
+
+    Attributes:
+        tenant_partition: Non-reversible tenant storage partition.
+        source_id: Stable logical source identifier.
+        source_revision: Content-derived source revision identifier.
+        source_uri: Canonical URI exposed by citations.
+        title: Human-readable source title.
+        document_format: Parser selected for the source document.
+        content_hash: SHA-256 digest of the uploaded source bytes.
+        source_updated_at: Last-modified time reported by the source.
+        ingested_at: Time the portal committed this source revision.
+        byte_count: Number of uploaded source bytes.
+        page_slug: Published page associated with this source.
+        page_revision_id: Immutable page revision created from this source.
+        tags: Normalized source tags.
+        required_scopes: Scopes required to retrieve this source.
+    """
+
+    tenant_partition: Annotated[str, "Non-reversible tenant storage partition."]
+    source_id: Annotated[str, "Stable logical source identifier."]
+    source_revision: Annotated[str, "Content-derived source revision identifier."]
+    source_uri: Annotated[str, "Canonical URI exposed by citations."]
+    title: Annotated[str, "Human-readable source title."]
+    document_format: Annotated[str, "Parser selected for the source document."]
+    content_hash: Annotated[str, "SHA-256 digest of the uploaded source bytes."]
+    source_updated_at: Annotated[datetime, "Last-modified time reported by the source."]
+    ingested_at: Annotated[datetime, "Time the portal committed this source revision."]
+    byte_count: Annotated[int, "Number of uploaded source bytes."]
+    page_slug: Annotated[str, "Published page associated with this source."]
+    page_revision_id: Annotated[str, "Immutable page revision created from this source."]
+    tags: Annotated[tuple[str, ...], "Normalized source tags."] = ()
+    required_scopes: Annotated[frozenset[str], "Scopes required to retrieve this source."] = field(
+        default_factory=frozenset
+    )
 
 
 def summarize_page(page: WikiPage) -> WikiPageSummary:

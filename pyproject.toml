@@ -25,6 +25,8 @@ dependencies = [
     "pgvector>=0.4,<1",
     "psycopg[binary]>=3.2,<4",
     "pydantic>=2.11,<3",
+    "pypdf>=6.16,<7",
+    "python-docx>=1.2,<2",
     "python-dotenv>=1.0.1,<2",
     "sqlalchemy>=2.0.51,<3",
 ]
@@ -43,6 +45,7 @@ dev = [
 
 [project.scripts]
 mcp-portal = "mcp_portal.__main__:main"
+mcp-portal-wiki = "mcp_portal.wiki.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

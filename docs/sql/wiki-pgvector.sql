@@ -38,6 +38,29 @@ CREATE TABLE IF NOT EXISTS mcp_portal_wiki.pages (
     CHECK (jsonb_typeof(required_scopes) = 'array')
 );
 
+CREATE TABLE IF NOT EXISTS mcp_portal_wiki.sources (
+    tenant_partition varchar(64) NOT NULL,
+    source_id varchar(512) NOT NULL,
+    source_revision varchar(160) NOT NULL,
+    source_uri varchar(2048) NOT NULL,
+    title varchar(500) NOT NULL,
+    document_format varchar(40) NOT NULL,
+    content_hash varchar(71) NOT NULL,
+    source_updated_at timestamptz NOT NULL,
+    ingested_at timestamptz NOT NULL,
+    byte_count bigint NOT NULL CHECK (byte_count > 0),
+    page_slug varchar(200) NOT NULL,
+    page_revision_id varchar(160) NOT NULL,
+    tags jsonb NOT NULL DEFAULT '[]'::jsonb,
+    required_scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
+    PRIMARY KEY (tenant_partition, source_id),
+    FOREIGN KEY (tenant_partition, page_slug, page_revision_id)
+        REFERENCES mcp_portal_wiki.page_revisions
+        (tenant_partition, slug, revision_id),
+    CHECK (jsonb_typeof(tags) = 'array'),
+    CHECK (jsonb_typeof(required_scopes) = 'array')
+);
+
 CREATE TABLE IF NOT EXISTS mcp_portal_wiki.passages (
     tenant_partition varchar(64) NOT NULL,
     passage_id varchar(160) NOT NULL,
@@ -78,3 +101,6 @@ CREATE INDEX IF NOT EXISTS ix_wiki_pages_updated
 
 CREATE INDEX IF NOT EXISTS ix_wiki_passages_source
     ON mcp_portal_wiki.passages (tenant_partition, source_id, source_revision);
+
+CREATE INDEX IF NOT EXISTS ix_wiki_sources_updated
+    ON mcp_portal_wiki.sources (tenant_partition, ingested_at DESC);

@@ -244,7 +244,7 @@ unfiltered search.
 
 ## Persistent Wiki
 
-Install the wiki extra and configure a dedicated PostgreSQL database with pgvector:
+Install the project dependencies and configure a dedicated PostgreSQL database with pgvector:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
@@ -264,6 +264,34 @@ local-development convenience and should remain disabled in production. PostgreS
 search is always available; pgvector similarity is added when a deployment registers a
 `wiki_embeddings` client. See `docs/wiki-implementation.md` for the ingestion, drafting, review,
 migration, and operations plan.
+
+Upload one trusted local document with the operator-only CLI. Start with a dry run, then repeat with
+the explicit publish flag:
+
+```powershell
+.\.venv\Scripts\mcp-portal-wiki.exe ingest .\knowledge\production-runbook.pdf `
+  --tenant-id acme `
+  --source-id operations-production-runbook `
+  --source-uri https://docs.example.com/runbooks/production `
+  --tag operations `
+  --required-scope operations.read `
+  --dry-run
+
+.\.venv\Scripts\mcp-portal-wiki.exe ingest .\knowledge\production-runbook.pdf `
+  --tenant-id acme `
+  --source-id operations-production-runbook `
+  --source-uri https://docs.example.com/runbooks/production `
+  --tag operations `
+  --required-scope operations.read `
+  --publish
+```
+
+Use `--single-tenant` instead of `--tenant-id` for a single-tenant portal. Supported local formats
+are Markdown, UTF-8 text, HTML, PDF, and DOCX. Local paths are never exposed in stored citations:
+when `--source-uri` is omitted, the command generates a non-reversible URN. Reusing the same
+`--source-id` creates an immutable page revision and atomically replaces the previous passage set,
+so moved files should retain their original logical source ID. Dry runs parse locally and do not
+require a database connection; publishing requires the configured PostgreSQL wiki schema.
 
 FastMCP emits spans and MCP Portal emits tool, admission, downstream, usage, and estimated-cost
 metrics when an OpenTelemetry SDK is attached. Set `OTEL_SERVICE_NAME` and

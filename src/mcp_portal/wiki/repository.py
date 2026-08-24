@@ -7,12 +7,14 @@ import re
 from collections.abc import Iterable, Sequence
 from typing import Protocol
 
+from mcp_portal.errors import ValidationPortalError
 from mcp_portal.wiki.models import (
     WikiAccess,
     WikiPage,
     WikiPageRecord,
     WikiPassageRecord,
     WikiSearchHit,
+    WikiSourceRecord,
     summarize_page,
 )
 
@@ -100,6 +102,21 @@ class WikiRepository(Protocol):
         """
         ...
 
+    def ingest_source(
+        self,
+        source: WikiSourceRecord,
+        page: WikiPageRecord,
+        passages: Sequence[WikiPassageRecord],
+    ) -> None:
+        """Atomically publish a source revision and replace its passages.
+
+        Args:
+            source: Durable current-source metadata.
+            page: Immutable published page revision derived from the source.
+            passages: Complete passage set for the new source revision.
+        """
+        ...
+
 
 class InMemoryWikiRepository:
     """Non-durable repository used only for deterministic tests."""
@@ -119,6 +136,7 @@ class InMemoryWikiRepository:
         self._pages: dict[tuple[str, str, str], WikiPageRecord] = {}
         self._published: dict[tuple[str, str], str] = {}
         self._passages: dict[tuple[str, str], WikiPassageRecord] = {}
+        self._sources: dict[tuple[str, str], WikiSourceRecord] = {}
         for page in pages:
             self.save_page(page)
         for passage in passages:
@@ -148,6 +166,46 @@ class InMemoryWikiRepository:
             record: Tenant-partitioned evidence passage to store.
         """
         self._passages[(record.tenant_partition, record.passage_id)] = record
+
+    def ingest_source(
+        self,
+        source: WikiSourceRecord,
+        page: WikiPageRecord,
+        passages: Sequence[WikiPassageRecord],
+    ) -> None:
+        """Atomically publish a source revision and replace its passages.
+
+        Args:
+            source: Durable current-source metadata.
+            page: Immutable published page revision derived from the source.
+            passages: Complete passage set for the new source revision.
+        """
+        _validate_ingestion_records(source, page, passages)
+        page_key = (page.tenant_partition, page.page.slug, page.page.revision_id)
+        existing = self._pages.get(page_key)
+        if existing is not None and existing.page.content_hash != page.page.content_hash:
+            raise ValueError("Wiki revisions are immutable")
+        pages = dict(self._pages)
+        published = dict(self._published)
+        stored_passages = {
+            key: record
+            for key, record in self._passages.items()
+            if not (
+                record.tenant_partition == source.tenant_partition
+                and record.citation.source_id == source.source_id
+            )
+        }
+        pages[page_key] = page
+        published[(page.tenant_partition, page.page.slug)] = page.page.revision_id
+        stored_passages.update(
+            {(record.tenant_partition, record.passage_id): record for record in passages}
+        )
+        sources = dict(self._sources)
+        sources[(source.tenant_partition, source.source_id)] = source
+        self._pages = pages
+        self._published = published
+        self._passages = stored_passages
+        self._sources = sources
 
     def get_page(self, access: WikiAccess, slug: str) -> WikiPage | None:
         """Return the visible published page for ``slug``.
@@ -305,3 +363,35 @@ def page_summaries(pages: Sequence[WikiPage]) -> list:
         Bounded page summaries in the original order.
     """
     return [summarize_page(page) for page in pages]
+
+
+def _validate_ingestion_records(
+    source: WikiSourceRecord,
+    page: WikiPageRecord,
+    passages: Sequence[WikiPassageRecord],
+) -> None:
+    """Validate one complete source transaction before storage mutation.
+
+    Args:
+        source: Durable current-source metadata.
+        page: Immutable published page revision derived from the source.
+        passages: Complete passage set for the new source revision.
+    """
+    if page.page.status != "published" or not passages:
+        raise ValidationPortalError(
+            "Wiki ingestion requires a published page and at least one passage."
+        )
+    if (
+        source.tenant_partition != page.tenant_partition
+        or source.page_slug != page.page.slug
+        or source.page_revision_id != page.page.revision_id
+    ):
+        raise ValidationPortalError("Wiki ingestion source and page metadata do not match.")
+    if any(
+        record.tenant_partition != source.tenant_partition
+        or record.page_slug != source.page_slug
+        or record.citation.source_id != source.source_id
+        or record.citation.source_revision != source.source_revision
+        for record in passages
+    ):
+        raise ValidationPortalError("Wiki ingestion passages do not match the source transaction.")

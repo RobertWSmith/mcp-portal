@@ -17,6 +17,7 @@ from mcp_portal.wiki.models import (
     WikiPage,
     WikiPageRecord,
     WikiPassageRecord,
+    WikiSourceRecord,
 )
 from mcp_portal.wiki.pgvector import (
     PgVectorWikiRepository,
@@ -27,6 +28,7 @@ from mcp_portal.wiki.pgvector import (
     _page_from_row,
     _page_values,
     _passage_values,
+    _source_values,
 )
 
 NOW = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
@@ -172,6 +174,26 @@ def passage_record(*, embedding: tuple[float, ...] | None = (1.0, 0.0)) -> WikiP
     )
 
 
+def source_record() -> WikiSourceRecord:
+    """Create deterministic current-source metadata."""
+    return WikiSourceRecord(
+        tenant_partition="tenant-hash",
+        source_id="source-1",
+        source_revision="git:abc123",
+        source_uri="https://docs.example/runbook",
+        title="Operations Runbook",
+        document_format="markdown",
+        content_hash=HASH,
+        source_updated_at=NOW,
+        ingested_at=NOW,
+        byte_count=512,
+        page_slug="deployments",
+        page_revision_id="revision-1",
+        tags=("operations",),
+        required_scopes=frozenset({"operations.read"}),
+    )
+
+
 def page_row() -> dict[str, Any]:
     """Return a database-shaped page revision mapping."""
     return _page_values(page_record())
@@ -205,7 +227,9 @@ def test_table_metadata_uses_halfvec_full_text_and_database_acl() -> None:
         "ix_wiki_passages_source",
     }
     assert {index.name for index in tables.pages.indexes} == {"ix_wiki_pages_updated"}
+    assert {index.name for index in tables.sources.indexes} == {"ix_wiki_sources_updated"}
     assert len(tables.pages.foreign_key_constraints) == 1
+    assert len(tables.sources.foreign_key_constraints) == 1
     assert len(predicates) == 2
 
 
@@ -262,6 +286,25 @@ def test_save_passage_validates_dimensions_and_upserts() -> None:
         storage.save_passage(passage_record(embedding=(1.0,)))
 
 
+def test_ingest_source_executes_one_complete_transaction() -> None:
+    """Verify source, page, pointer, deletion, and passages share one transaction."""
+    storage, connection = repository(
+        FakeResult(),
+        FakeResult(),
+        FakeResult(),
+        FakeResult(),
+        FakeResult(),
+        FakeResult(),
+    )
+
+    storage.ingest_source(source_record(), page_record(), (passage_record(),))
+
+    assert len(connection.statements) == 6
+    values = _source_values(source_record())
+    assert values["source_id"] == "source-1"
+    assert values["required_scopes"] == ["operations.read"]
+
+
 def test_get_and_list_pages_deserialize_authorized_database_results() -> None:
     """Verify page reads deserialize rows after database-side filters."""
     storage, _ = repository(FakeResult(rows=[page_row()]), FakeResult(rows=[page_row()]))
@@ -305,7 +348,16 @@ def test_search_runs_lexical_and_optional_vector_retrievers() -> None:
 
 @pytest.mark.parametrize(
     "operation",
-    ["initialize", "readiness", "save_page", "save_passage", "get_page", "list_pages", "search"],
+    [
+        "initialize",
+        "readiness",
+        "save_page",
+        "save_passage",
+        "ingest_source",
+        "get_page",
+        "list_pages",
+        "search",
+    ],
 )
 def test_database_failures_are_sanitized(operation: str) -> None:
     """Verify all database errors use stable public metadata without SQL details."""
@@ -321,6 +373,8 @@ def test_database_failures_are_sanitized(operation: str) -> None:
             storage.save_page(page_record())
         elif operation == "save_passage":
             storage.save_passage(passage_record())
+        elif operation == "ingest_source":
+            storage.ingest_source(source_record(), page_record(), (passage_record(),))
         elif operation == "get_page":
             storage.get_page(access(), "deployments")
         elif operation == "list_pages":

@@ -8,6 +8,7 @@ from typing import Annotated, Any
 
 from sqlalchemy import (
     Boolean,
+    BigInteger,
     CheckConstraint,
     Column,
     Computed,
@@ -20,6 +21,7 @@ from sqlalchemy import (
     Table,
     Text,
     and_,
+    delete,
     func,
     select,
     text,
@@ -38,7 +40,9 @@ from mcp_portal.wiki.models import (
     WikiPageRecord,
     WikiPassageRecord,
     WikiSearchHit,
+    WikiSourceRecord,
 )
+from mcp_portal.wiki.repository import _validate_ingestion_records
 
 
 @dataclass(frozen=True)
@@ -50,12 +54,14 @@ class WikiTables:
         pages: Published page-pointer table.
         revisions: Immutable page-revision table.
         passages: Searchable source-passage table.
+        sources: Current ingested-source metadata table.
     """
 
     metadata: Annotated[MetaData, "SQLAlchemy metadata bound to the configured schema."]
     pages: Annotated[Table, "Published page-pointer table."]
     revisions: Annotated[Table, "Immutable page-revision table."]
     passages: Annotated[Table, "Searchable source-passage table."]
+    sources: Annotated[Table, "Current ingested-source metadata table."]
 
 
 class PgVectorWikiRepository:
@@ -180,6 +186,112 @@ class PgVectorWikiRepository:
                 )
         except SQLAlchemyError as error:
             raise _database_error("save_passage", error) from error
+
+    def ingest_source(
+        self,
+        source: WikiSourceRecord,
+        page: WikiPageRecord,
+        passages: Sequence[WikiPassageRecord],
+    ) -> None:
+        """Atomically publish a source revision and replace its passages.
+
+        Args:
+            source: Durable current-source metadata.
+            page: Immutable published page revision derived from the source.
+            passages: Complete passage set for the new source revision.
+        """
+        _validate_ingestion_records(source, page, passages)
+        for passage in passages:
+            if (
+                passage.embedding is not None
+                and len(passage.embedding) != self.settings.embedding_dimensions
+            ):
+                raise ValidationPortalError(
+                    "Wiki passage embedding has the wrong dimensions.",
+                    details={
+                        "expected_dimensions": self.settings.embedding_dimensions,
+                        "actual_dimensions": len(passage.embedding),
+                    },
+                )
+        try:
+            with self.engine.begin() as connection:
+                existing = connection.execute(
+                    select(self.tables.revisions.c.content_hash).where(
+                        self.tables.revisions.c.tenant_partition == page.tenant_partition,
+                        self.tables.revisions.c.slug == page.page.slug,
+                        self.tables.revisions.c.revision_id == page.page.revision_id,
+                    )
+                ).scalar_one_or_none()
+                if existing is not None and existing != page.page.content_hash:
+                    raise ValidationPortalError(
+                        "Wiki revisions are immutable.",
+                        details={
+                            "slug": page.page.slug,
+                            "revision_id": page.page.revision_id,
+                        },
+                    )
+                connection.execute(
+                    postgresql_insert(self.tables.revisions)
+                    .values(**_page_values(page))
+                    .on_conflict_do_nothing(
+                        index_elements=("tenant_partition", "slug", "revision_id")
+                    )
+                )
+                pointer = {
+                    "tenant_partition": page.tenant_partition,
+                    "slug": page.page.slug,
+                    "published_revision_id": page.page.revision_id,
+                    "required_scopes": sorted(page.required_scopes),
+                    "updated_at": page.page.updated_at,
+                }
+                connection.execute(
+                    postgresql_insert(self.tables.pages)
+                    .values(**pointer)
+                    .on_conflict_do_update(
+                        index_elements=("tenant_partition", "slug"),
+                        set_={
+                            "published_revision_id": page.page.revision_id,
+                            "required_scopes": sorted(page.required_scopes),
+                            "updated_at": page.page.updated_at,
+                        },
+                    )
+                )
+                connection.execute(
+                    delete(self.tables.passages).where(
+                        self.tables.passages.c.tenant_partition == source.tenant_partition,
+                        self.tables.passages.c.source_id == source.source_id,
+                    )
+                )
+                passage_values = [_passage_values(record) for record in passages]
+                passage_insert = postgresql_insert(self.tables.passages).values(passage_values)
+                passage_updates = {
+                    name: getattr(passage_insert.excluded, name)
+                    for name in passage_values[0]
+                    if name not in {"tenant_partition", "passage_id"}
+                }
+                connection.execute(
+                    passage_insert.on_conflict_do_update(
+                        index_elements=("tenant_partition", "passage_id"),
+                        set_=passage_updates,
+                    )
+                )
+                source_values = _source_values(source)
+                source_insert = postgresql_insert(self.tables.sources).values(**source_values)
+                source_updates = {
+                    name: getattr(source_insert.excluded, name)
+                    for name in source_values
+                    if name not in {"tenant_partition", "source_id"}
+                }
+                connection.execute(
+                    source_insert.on_conflict_do_update(
+                        index_elements=("tenant_partition", "source_id"),
+                        set_=source_updates,
+                    )
+                )
+        except ValidationPortalError:
+            raise
+        except SQLAlchemyError as error:
+            raise _database_error("ingest_source", error) from error
 
     def get_page(self, access: WikiAccess, slug: str) -> WikiPage | None:
         """Return a page after tenant and ACL filtering in PostgreSQL.
@@ -336,7 +448,7 @@ def _build_tables(settings: WikiSettings) -> WikiTables:
         settings: Wiki schema name and semantic embedding dimensions.
 
     Returns:
-        SQLAlchemy metadata and its three persistent wiki tables.
+        SQLAlchemy metadata and its four persistent wiki tables.
     """
     try:
         from pgvector.sqlalchemy import HALFVEC
@@ -389,6 +501,36 @@ def _build_tables(settings: WikiSettings) -> WikiTables:
         ),
         CheckConstraint("jsonb_typeof(required_scopes) = 'array'"),
     )
+    sources = Table(
+        "sources",
+        metadata,
+        Column("tenant_partition", String(64), nullable=False),
+        Column("source_id", String(512), nullable=False),
+        Column("source_revision", String(160), nullable=False),
+        Column("source_uri", String(2_048), nullable=False),
+        Column("title", String(500), nullable=False),
+        Column("document_format", String(40), nullable=False),
+        Column("content_hash", String(71), nullable=False),
+        Column("source_updated_at", DateTime(timezone=True), nullable=False),
+        Column("ingested_at", DateTime(timezone=True), nullable=False),
+        Column("byte_count", BigInteger, nullable=False),
+        Column("page_slug", String(200), nullable=False),
+        Column("page_revision_id", String(160), nullable=False),
+        Column("tags", JSONB, nullable=False, default=list),
+        Column("required_scopes", JSONB, nullable=False, default=list),
+        PrimaryKeyConstraint("tenant_partition", "source_id"),
+        ForeignKeyConstraint(
+            ("tenant_partition", "page_slug", "page_revision_id"),
+            (
+                revisions.c.tenant_partition,
+                revisions.c.slug,
+                revisions.c.revision_id,
+            ),
+        ),
+        CheckConstraint("byte_count > 0"),
+        CheckConstraint("jsonb_typeof(tags) = 'array'"),
+        CheckConstraint("jsonb_typeof(required_scopes) = 'array'"),
+    )
     passages = Table(
         "passages",
         metadata,
@@ -439,7 +581,12 @@ def _build_tables(settings: WikiSettings) -> WikiTables:
         passages.c.source_id,
         passages.c.source_revision,
     )
-    return WikiTables(metadata, pages, revisions, passages)
+    Index(
+        "ix_wiki_sources_updated",
+        sources.c.tenant_partition,
+        sources.c.ingested_at.desc(),
+    )
+    return WikiTables(metadata, pages, revisions, passages, sources)
 
 
 def _access_predicates(table: Table, access: WikiAccess) -> tuple[Any, ...]:
@@ -512,6 +659,33 @@ def _passage_values(record: WikiPassageRecord) -> dict[str, Any]:
         "tags": list(record.tags),
         "required_scopes": sorted(record.required_scopes),
         "embedding": list(record.embedding) if record.embedding is not None else None,
+    }
+
+
+def _source_values(record: WikiSourceRecord) -> dict[str, Any]:
+    """Serialize current source metadata for PostgreSQL.
+
+    Args:
+        record: Tenant-partitioned ingested source metadata.
+
+    Returns:
+        Column values suitable for a source metadata upsert.
+    """
+    return {
+        "tenant_partition": record.tenant_partition,
+        "source_id": record.source_id,
+        "source_revision": record.source_revision,
+        "source_uri": record.source_uri,
+        "title": record.title,
+        "document_format": record.document_format,
+        "content_hash": record.content_hash,
+        "source_updated_at": record.source_updated_at,
+        "ingested_at": record.ingested_at,
+        "byte_count": record.byte_count,
+        "page_slug": record.page_slug,
+        "page_revision_id": record.page_revision_id,
+        "tags": list(record.tags),
+        "required_scopes": sorted(record.required_scopes),
     }
 
 
